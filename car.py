@@ -36,7 +36,18 @@ class Car:
 
     def reset(self):
         """Reinicia la posición, ángulo y velocidad del auto (escalado a resolución)."""
-        # CORREGIDO: Posición inicial segura en la carretera blanca
+        # TASK 2: Usar spawn point personalizado si está disponible
+        if hasattr(self.env, 'custom_track_data') and self.env.custom_track_data:
+            spawn_point = self.env.custom_track_data.get('spawn_point')
+            if spawn_point:
+                self.x = spawn_point[0]
+                self.y = spawn_point[1]
+                self.angle = spawn_point[2]
+                self.speed = 0.0
+                self.sensor_distances = [0] * len(self.sensor_angles)
+                return
+        
+        # CORREGIDO: Posición inicial segura en la carretera blanca (por defecto)
         self.x = self.env.width / 2  # Centro horizontal
         self.y = self.env.height * 0.77  # 65% hacia abajo (dentro de la carretera blanca)
         self.angle = -math.pi  # Hacia arriba

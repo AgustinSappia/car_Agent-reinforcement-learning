@@ -208,7 +208,7 @@ class ControlMenu:
 
 class GeneticTrainer:
     """Sistema de entrenamiento genético/evolutivo"""
-    def __init__(self, width=1920, height=1080):
+    def __init__(self, width=1920, height=1080, custom_track_data=None):
         pygame.init()
         self.width = width
         self.height = height
@@ -216,8 +216,11 @@ class GeneticTrainer:
         pygame.display.set_caption("Genetic Training - Self Driving Car AI")
         self.clock = pygame.time.Clock()
         
+        # TASK 4: Custom track support
+        self.custom_track_data = custom_track_data
+        
         # Entorno compartido
-        self.env = Environment(width=width, height=height)
+        self.env = Environment(width=width, height=height, custom_track_data=custom_track_data)
         
         # Configuración
         self.state_size = 7
@@ -516,5 +519,31 @@ class GeneticTrainer:
 
 
 if __name__ == "__main__":
-    trainer = GeneticTrainer(width=1920, height=1080)
+    # TASK 4: Mostrar selector de pistas al inicio
+    print("\n" + "="*60)
+    print("INICIANDO SELECTOR DE PISTAS")
+    print("="*60 + "\n")
+    
+    # Importar selector
+    from track_selector import select_track
+    from track_loader import load_track_data
+    
+    # Mostrar selector
+    selected_track = select_track()
+    
+    # Cargar datos de la pista seleccionada
+    custom_track_data = None
+    if selected_track:
+        track_data = load_track_data(selected_track['name'])
+        if track_data:
+            custom_track_data = track_data
+            print(f"\n✓ Pista seleccionada: {selected_track['name']}")
+            print(f"  - Vueltas requeridas: {track_data.get('required_laps', 1)}")
+        else:
+            print("\n✗ Error cargando pista, usando pista por defecto")
+    else:
+        print("\n✗ No se seleccionó pista, usando pista por defecto")
+    
+    # Iniciar entrenamiento
+    trainer = GeneticTrainer(width=1920, height=1080, custom_track_data=custom_track_data)
     trainer.run()
