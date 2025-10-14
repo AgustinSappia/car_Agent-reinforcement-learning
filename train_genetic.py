@@ -109,8 +109,8 @@ class ControlMenu:
         
         # Parámetros ajustables
         self.params = {
-            'num_agents': {'value': 5, 'min': 1, 'max': 8, 'step': 1, 'label': 'Agentes'},
-            'max_reward': {'value': 100, 'min': 50, 'max': 500, 'step': 10, 'label': 'Max Reward'},
+            'num_agents': {'value': 5, 'min': 1, 'max': 100, 'step': 1, 'label': 'Agentes'},
+            'max_reward': {'value': 1000, 'min': 100, 'max': 500000, 'step': 200, 'label': 'Max Reward'},
             'epsilon': {'value': 0.1, 'min': 0.0, 'max': 1.0, 'step': 0.05, 'label': 'Epsilon'},
             'speed_mult': {'value': 1.0, 'min': 0.5, 'max': 5.0, 'step': 0.5, 'label': 'Velocidad'},
         }
@@ -184,12 +184,22 @@ class ControlMenu:
         """Maneja clicks en el menú"""
         for key, param in self.params.items():
             if 'minus_rect' in param and param['minus_rect'].collidepoint(pos):
-                new_value = param['value'] - param['step']
+                # TASK 1: Dynamic step for epsilon - slower when < 0.1, faster when >= 0.1
+                step = param['step']
+                if key == 'epsilon':
+                    step = 0.01 if param['value'] < 0.1 else 0.1
+                
+                new_value = param['value'] - step
                 param['value'] = max(param['min'], new_value)
                 return key, param['value']
             
             if 'plus_rect' in param and param['plus_rect'].collidepoint(pos):
-                new_value = param['value'] + param['step']
+                # TASK 1: Dynamic step for epsilon - slower when < 0.1, faster when >= 0.1
+                step = param['step']
+                if key == 'epsilon':
+                    step = 0.01 if param['value'] < 0.1 else 0.1
+                
+                new_value = param['value'] + step
                 param['value'] = min(param['max'], new_value)
                 return key, param['value']
         
