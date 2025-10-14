@@ -15,7 +15,7 @@ class Car:
         # CORREGIDO: Posición inicial segura en la carretera blanca (parte inferior del óvalo)
         self.x = self.env.width / 2  # Centro horizontal
         self.y = self.env.height * 0.77  # 65% hacia abajo (dentro de la carretera blanca)
-        self.angle = 0.0  # Ángulo en radianes (0 = hacia derecha)
+        self.angle = -math.pi / 2  # Ángulo en radianes (-π/2 = hacia arriba)
         self.speed = 0.0  # Velocidad actual
         self.max_speed = 5.0  # Velocidad máxima por frame
         self.acceleration = 0.2  # Aceleración por frame
@@ -39,7 +39,7 @@ class Car:
         # CORREGIDO: Posición inicial segura en la carretera blanca
         self.x = self.env.width / 2  # Centro horizontal
         self.y = self.env.height * 0.77  # 65% hacia abajo (dentro de la carretera blanca)
-        self.angle = 0.0  # Hacia la derecha
+        self.angle = -math.pi  # Hacia arriba
         self.speed = 0.0
         self.sensor_distances = [0] * len(self.sensor_angles)
 
