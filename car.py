@@ -1,6 +1,6 @@
 import math
 import pygame
-import numpy as np  # Para normalización en observación (si se usa)
+import numpy as np
 
 class Car:
     """
@@ -10,54 +10,59 @@ class Car:
     """
     def __init__(self, environment):
         self.env = environment  # Referencia al entorno para acceder al track
-        self.width_car = 20  # Ancho del auto (renombrado para evitar conflicto con env.width)
-        self.height_car = 40  # Alto del auto
-        # CORREGIDO: Posición inicial segura en la carretera blanca (parte inferior del óvalo)
-        self.x = self.env.width / 2  # Centro horizontal
-        self.y = self.env.height * 0.77  # 65% hacia abajo (dentro de la carretera blanca)
-        self.angle = -math.pi / 2  # Ángulo en radianes (-π/2 = hacia arriba)
-        self.speed = 0.0  # Velocidad actual
-        self.max_speed = 5.0  # Velocidad máxima por frame
-        self.acceleration = 0.2  # Aceleración por frame
-        self.friction = 0.05  # Fricción para desacelerar
-        self.turn_speed = 0.1  # Velocidad de giro en radianes por frame
-        
-        # Ángulos relativos de los sensores (5 rayos: -60°, -30°, 0°, 30°, 60°)
-        self.sensor_angles = [
-            -math.pi / 3,  # -60 grados
-            -math.pi / 6,  # -30 grados
-            0,
-            math.pi / 6,   # 30 grados
-            math.pi / 3    # 60 grados
-        ]
-        # Distancia máxima de sensor: 20% de la menor dimensión, como entero
-        self.max_sensor_distance = int(min(self.env.width, self.env.height) * 0.2)
-        self.sensor_distances = [0] * len(self.sensor_angles)  # Almacena distancias para render
+        self.width_car = 20     # Ancho del auto
+        self.height_car = 40    # Alto del auto
 
+        # Posición inicial
+        self.x = self.env.width / 2
+        self.y = self.env.height * 0.77
+        self.angle = -math.pi / 2  # Hacia arriba
+
+        # Movimiento
+        self.speed = 0.0
+        self.max_speed = 5.0
+        self.acceleration = 0.2
+        self.friction = 0.05
+        self.turn_speed = 0.1
+
+        # Sensores (-60°, -30°, 0°, 30°, 60°)
+        self.sensor_angles = [
+            -math.pi / 3,
+            -math.pi / 6,
+            0,
+            math.pi / 6,
+            math.pi / 3
+        ]
+        self.max_sensor_distance = int(min(self.env.width, self.env.height) * 0.2)
+        self.sensor_distances = [0] * len(self.sensor_angles)
+
+    # -----------------------------
+    # RESET
+    # -----------------------------
     def reset(self):
-        """Reinicia la posición, ángulo y velocidad del auto (escalado a resolución)."""
-        # TASK 2: Usar spawn point personalizado si está disponible
+        """Reinicia la posición, ángulo y velocidad del auto."""
         if hasattr(self.env, 'custom_track_data') and self.env.custom_track_data:
             spawn_point = self.env.custom_track_data.get('spawn_point')
-            if spawn_point:
-                self.x = spawn_point[0]
-                self.y = spawn_point[1]
-                self.angle = spawn_point[2]
+            if spawn_point and len(spawn_point) >= 3:
+                self.x, self.y, self.angle = spawn_point[:3]
                 self.speed = 0.0
                 self.sensor_distances = [0] * len(self.sensor_angles)
                 return
         
-        # CORREGIDO: Posición inicial segura en la carretera blanca (por defecto)
-        self.x = self.env.width / 2  # Centro horizontal
-        self.y = self.env.height * 0.77  # 65% hacia abajo (dentro de la carretera blanca)
-        self.angle = -math.pi  # Hacia arriba
+        # Por defecto
+        self.x = self.env.width / 2
+        self.y = self.env.height * 0.77
+        self.angle = -math.pi / 2
         self.speed = 0.0
         self.sensor_distances = [0] * len(self.sensor_angles)
 
+    # -----------------------------
+    # ACCIONES Y MOVIMIENTO
+    # -----------------------------
     def apply_action(self, action):
         """
         Aplica una acción al auto.
-        action: tupla (steering: -1 izquierda/0 ninguno/1 derecha, throttle: 0 no/1 sí)
+        action: tupla (steering: -1 izquierda / 0 ninguno / 1 derecha, throttle: 0 no / 1 sí)
         """
         steering, throttle = action
         if throttle > 0:
@@ -80,101 +85,98 @@ class Car:
         self.angle += self.turn_speed
 
     def update(self):
-        """Actualiza la posición y velocidad del auto (movimiento y fricción)."""
-        # Aplicar fricción para desacelerar gradualmente
+        """Actualiza la posición y velocidad del auto."""
         if self.speed > 0:
             self.speed = max(self.speed - self.friction, 0)
-        
-        # Mover el auto basado en ángulo y velocidad
+
         self.x += self.speed * math.cos(self.angle)
         self.y += self.speed * math.sin(self.angle)
-        
-        # CORREGIDO: Normalizar ángulo a [-π, π) para mejor manejo
+
+        # Mantener ángulo entre [-π, π)
         self.angle = (self.angle + math.pi) % (2 * math.pi) - math.pi
 
+    # -----------------------------
+    # SENSORES
+    # -----------------------------
     def get_sensor_distances(self, track):
         """
         Calcula las distancias de los sensores mediante raycasting.
-        Devuelve lista de 5 floats (distancias).
+        Devuelve lista de floats (distancias normalizadas).
         """
         distances = []
         for rel_angle in self.sensor_angles:
             dist = self._cast_ray(track, rel_angle)
             distances.append(dist)
-        self.sensor_distances = distances  # Almacenar para render
+        self.sensor_distances = distances
         return distances
 
     def _cast_ray(self, track, rel_angle):
         """
         Proyecta un rayo desde la posición del auto en la dirección (angle + rel_angle).
         Avanza píxel por píxel hasta chocar con un borde negro o límite.
-        OPTIMIZADO: Usa pasos más grandes y refina al detectar colisión.
         """
         direction_angle = self.angle + rel_angle
         dx = math.cos(direction_angle)
         dy = math.sin(direction_angle)
-        
+
         x, y = self.x, self.y
-        max_dist = self.max_sensor_distance  # Ya es int, no necesita conversión
-        
-        # Búsqueda gruesa (pasos de 5 píxeles para optimización)
+        max_dist = self.max_sensor_distance
         step_size = 5
+
         for distance in range(step_size, max_dist + 1, step_size):
             px = int(x + distance * dx)
             py = int(y + distance * dy)
-            
-            # Verificar límites de la pantalla
-            if (px < 0 or px >= track.get_width() or
-                py < 0 or py >= track.get_height()):
-                # Refinar búsqueda en los últimos píxeles
-                for fine_dist in range(max(1, distance - step_size), distance + 1):
-                    px_fine = int(x + fine_dist * dx)
-                    py_fine = int(y + fine_dist * dy)
-                    if (px_fine < 0 or px_fine >= track.get_width() or
-                        py_fine < 0 or py_fine >= track.get_height()):
-                        return fine_dist
+
+            if px < 0 or px >= track.get_width() or py < 0 or py >= track.get_height():
                 return distance
-            
-            # Verificar si el píxel es un borde negro (colisión)
-            if track.get_at((px, py)) == (0, 0, 0):
-                # Refinar búsqueda en los últimos píxeles
-                for fine_dist in range(max(1, distance - step_size), distance + 1):
+
+            try:
+                color = track.get_at((px, py))[:3]
+            except Exception:
+                color = (0, 0, 0)
+
+            if color == (0, 0, 0):  # Borde o fuera de pista
+                # Refinar en pasos pequeños
+                for fine_dist in range(distance - step_size, distance + 1):
                     px_fine = int(x + fine_dist * dx)
                     py_fine = int(y + fine_dist * dy)
-                    if (px_fine >= 0 and px_fine < track.get_width() and
-                        py_fine >= 0 and py_fine < track.get_height()):
-                        if track.get_at((px_fine, py_fine)) == (0, 0, 0):
+                    if 0 <= px_fine < track.get_width() and 0 <= py_fine < track.get_height():
+                        try:
+                            fine_color = track.get_at((px_fine, py_fine))[:3]
+                        except Exception:
+                            fine_color = (0, 0, 0)
+                        if fine_color == (0, 0, 0):
                             return fine_dist
                 return distance
-        
+
         return max_dist
 
+    # -----------------------------
+    # RENDERIZADO
+    # -----------------------------
     def draw(self, screen):
         """
-        Dibuja el auto como un rectángulo rojo rotado en la pantalla.
+        Dibuja el auto como un rectángulo rojo rotado.
         """
-        # Crear superficie del auto (rectángulo simple)
-        car_surf = pygame.Surface((self.width_car, self.height_car))
-        car_surf.fill((255, 0, 0))  # Rojo
-        
-        # Rotar la superficie (PyGame usa grados, negativo para dirección correcta)
+        car_surf = pygame.Surface((self.width_car, self.height_car), pygame.SRCALPHA)
+        car_surf.fill((255, 0, 0, 220))  # Rojo con algo de transparencia
+
         rotated_surf = pygame.transform.rotate(car_surf, -math.degrees(self.angle))
         rotated_rect = rotated_surf.get_rect(center=(int(self.x), int(self.y)))
-        
         screen.blit(rotated_surf, rotated_rect.topleft)
 
     def draw_sensors(self, screen):
         """
-        Dibuja los sensores como líneas con color basado en distancia.
-        MEJORADO: Color rojo=cerca, verde=lejos para mejor visualización.
+        Dibuja los sensores como líneas con color según distancia.
+        Rojo = cerca, verde = lejos.
         """
-        for i, (rel_angle, dist) in enumerate(zip(self.sensor_angles, self.sensor_distances)):
+        for rel_angle, dist in zip(self.sensor_angles, self.sensor_distances):
             direction_angle = self.angle + rel_angle
             end_x = self.x + dist * math.cos(direction_angle)
             end_y = self.y + dist * math.sin(direction_angle)
-            
-            # Color basado en distancia (rojo si cerca, verde si lejos)
+
             ratio = dist / self.max_sensor_distance
             color = (int(255 * (1 - ratio)), int(255 * ratio), 0)
-            
+
             pygame.draw.line(screen, color, (int(self.x), int(self.y)), (int(end_x), int(end_y)), 2)
+            pygame.draw.circle(screen, color, (int(end_x), int(end_y)), 3)

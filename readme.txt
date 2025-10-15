@@ -21,3 +21,27 @@
 # - Done: True en choque (reinicia automáticamente para testing manual).
 # 
 # Código orientado a objetos, limpio y comentado.
+
+
+. Detección de Agentes Atascados (Nuevo)
+Rastrea la posición del agente cada step
+Si se mueve menos de 5 píxeles: contador aumenta
+50 steps atascado: Penalización de -2.0
+150 steps atascado: Muerte automática + penalización de -100
+2. Penalización por Estancamiento (Mejorada)
+Aumentada de -0.5 a -1.0 por 100 steps sin progreso
+Incentiva exploración activa
+3. Timeout Global (Nuevo)
+2000 steps máximo por agente
+Si excede: muerte automática + penalización de -50
+Garantiza que la generación siempre termine
+
+
+
+Checkpoint: +100 puntos
+Meta correcta: +200 puntos
+Completar todas las vueltas: +1000 puntos
+Cruzar sin checkpoints: -50 puntos
+Dirección incorrecta: -100 puntos
+Colisión: -200 puntos
+Zonas: ±0.3-0.5 (pequeño bonus/malus)

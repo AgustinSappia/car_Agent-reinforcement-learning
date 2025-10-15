@@ -1,113 +1,220 @@
+# environment.py
+"""
+Environment corregido y robusto para integrarse con:
+- track_editor_v2.py (editor)
+- train_genetic.py (trainer genético)
+
+Mejoras:
+- Soporte robusto para custom_track_data (surfaces escaladas/convertidas)
+- Detección de checkpoints y finish line (cruces de segmentos + dirección)
+- Detección de zonas (speed/slow) con surfaces opcionales (fallback por color en track)
+- Colisión robusta (centro + esquinas rotadas)
+- Observación y step() compatibles con trainer
+"""
+
 import pygame
 import math
-from car import Car
 import numpy as np
+from car import Car
 
 class Environment:
-    """
-    Clase principal del entorno de simulación.
-    Maneja la pista, el auto, colisiones, sensores y lógica de refuerzo.
-    Preparado para Gym-like interface: reset(), step(action), render().
-    La pista es un circuito ovalado simple (como NASCAR): carretera blanca en forma de óvalo
-    con isla central negra y bordes exteriores negros.
-    
-    Cambios para DQN y resolución:
-    - width/height parametrizados (default 1920x1080).
-    - Pista escalada proporcionalmente para cualquier resolución.
-    - No reset automático en step() (maneja done externamente).
-    """
     def __init__(self, width=1920, height=1080, custom_track_data=None):
-        self.width = width
-        self.height = height
-        
-        # TASK 2 & 3: Custom track support
+        pygame.init()
+        self.width = int(width)
+        self.height = int(height)
+
+        # Datos provistos por el editor (pueden ser Surfaces o None)
         self.custom_track_data = custom_track_data
-        
+
+        # Inicializar capas (se harán convert/scale si vienen desde editor)
+        self.track = None
+        self.finish_line = None
+        self.checkpoints = []
+        self.speed_zones = None
+        self.slow_zones = None
+        self.required_laps = 1
+
         if custom_track_data:
-            self.track = custom_track_data['track_layer']
-            self.finish_line = custom_track_data.get('finish_line')
-            self.checkpoints = custom_track_data.get('checkpoints', [])
-            self.speed_zones = custom_track_data.get('speed_zones')
-            self.slow_zones = custom_track_data.get('slow_zones')
-            self.required_laps = custom_track_data.get('required_laps', 3)
+            # Se espera que custom_track_data contenga Surfaces (track_layer, speed_zones, slow_zones)
+            # o None; además finish_line y checkpoints (tupla/lista).
+            # Hacemos defensiva: si la surface no tiene el tamaño correcto, la escalamos.
+            try:
+                print(f"[Environment] Cargando pista personalizada...")
+                print(f"[Environment] Datos recibidos: {list(custom_track_data.keys())}")
+                
+                t = custom_track_data.get('track_layer')
+                if t:
+                    print(f"[Environment] ✓ track_layer encontrado: {type(t)}")
+                    self.track = self._prepare_surface(t, convert_alpha=False)
+                    print(f"[Environment] ✓ track_layer preparado: {self.track.get_size()}")
+                else:
+                    print(f"[Environment] ✗ track_layer NO encontrado, usando pista por defecto")
+                    self.track = self._create_track()
+
+                finish = custom_track_data.get('finish_line')
+                if finish:
+                    # finish puede venir como (x1,y1,x2,y2,angle) o similar
+                    self.finish_line = tuple(finish)
+                    print(f"[Environment] ✓ finish_line: {self.finish_line}")
+                else:
+                    self.finish_line = None
+                    print(f"[Environment] ⚠ finish_line no definida")
+
+                cps = custom_track_data.get('checkpoints')
+                if cps:
+                    # normalizar a lista de tuplas (x1,y1,x2,y2)
+                    self.checkpoints = [tuple(cp) for cp in cps]
+                    print(f"[Environment] ✓ {len(self.checkpoints)} checkpoints cargados")
+                else:
+                    self.checkpoints = []
+                    print(f"[Environment] ⚠ No hay checkpoints definidos")
+
+                sz = custom_track_data.get('speed_zones')
+                if sz:
+                    self.speed_zones = self._prepare_surface(sz, convert_alpha=True)
+                    print(f"[Environment] ✓ speed_zones cargadas")
+                else:
+                    print(f"[Environment] ⚠ speed_zones no definidas")
+
+                slo = custom_track_data.get('slow_zones')
+                if slo:
+                    self.slow_zones = self._prepare_surface(slo, convert_alpha=True)
+                    print(f"[Environment] ✓ slow_zones cargadas")
+                else:
+                    print(f"[Environment] ⚠ slow_zones no definidas")
+
+                self.required_laps = int(custom_track_data.get('required_laps', 1))
+                print(f"[Environment] ✓ Vueltas requeridas: {self.required_laps}")
+                print(f"[Environment] ✓ Pista personalizada cargada exitosamente!")
+                
+            except Exception as e:
+                print(f"[Environment] ✗✗✗ ERROR CRÍTICO al cargar custom_track_data ✗✗✗")
+                print(f"[Environment] Error: {e}")
+                import traceback
+                traceback.print_exc()
+                print(f"[Environment] ⚠ FALLBACK: Usando pista procedural por defecto")
+                # fallback a pista procedural
+                self.track = self._create_track()
+                self.finish_line = None
+                self.checkpoints = []
+                self.speed_zones = None
+                self.slow_zones = None
+                self.required_laps = 1
         else:
+            # Crear pista por defecto
             self.track = self._create_track()
             self.finish_line = None
             self.checkpoints = []
             self.speed_zones = None
             self.slow_zones = None
             self.required_laps = 1
-        
+
+        # Carro asociado al entorno
         self.car = Car(self)
+
+        # Estado del entorno
         self.done = False
         self.action_space = 4
-        
-        # Sistema de vueltas y checkpoints
+
+        # Variables para laps / checkpoints (estado global, pero el trainer mantiene por agente)
         self.current_lap = 0
         self.checkpoints_passed = set()
         self.last_finish_cross = None
         self.finish_line_crossed = False
 
+    # -----------------------
+    # Helpers para surfaces
+    # -----------------------
+    def _prepare_surface(self, surf, convert_alpha=False):
+        """
+        Garantiza que la surface tenga el tamaño (width,height) y el formato adecuado.
+        Si surf no es pygame.Surface (por ejemplo, ruta), se intenta cargar con pygame.image.load.
+        """
+        # Si es string, intentar cargar desde archivo
+        try:
+            if isinstance(surf, str):
+                loaded = pygame.image.load(surf)
+            else:
+                loaded = surf
+        except Exception:
+            loaded = surf  # lo dejamos como venga, intentaremos usarlo
+
+        # Algunos objetos podrían ser superficies ya; verificamos
+        if isinstance(loaded, pygame.Surface):
+            # Escalar si tamaño diferente
+            if loaded.get_size() != (self.width, self.height):
+                try:
+                    loaded = pygame.transform.smoothscale(loaded, (self.width, self.height))
+                except Exception:
+                    loaded = pygame.transform.scale(loaded, (self.width, self.height))
+            # Convertir formato para acelerar get_at
+            try:
+                if convert_alpha:
+                    loaded = loaded.convert_alpha()
+                else:
+                    loaded = loaded.convert()
+            except Exception:
+                pass
+            return loaded
+        else:
+            # No es surface - intentar crear una surface vacía como fallback
+            s = pygame.Surface((self.width, self.height))
+            s.fill((0, 0, 0))
+            return s
+
+    # -----------------------
+    # Pista por defecto (procedural)
+    # -----------------------
     def _create_track(self):
-        """
-        Crea un circuito ovalado proceduralmente (estilo NASCAR simple), escalado a width/height.
-        - Fondo negro (bordes exteriores y obstáculos).
-        - Carretera: óvalo exterior blanco (10% márgenes).
-        - Isla central: óvalo interior negro (ancho de carretera ~15-20% de height).
-        """
-        track = pygame.Surface((int(self.width), int(self.height)))  # Enteros explícitos
-        track.fill((0, 0, 0))  # Fondo negro (obstáculos por defecto)
-        
-        # Márgenes proporcionales (10% de width/height)
+        track = pygame.Surface((self.width, self.height))
+        track = track.convert()
+        track.fill((0, 0, 0))
+
         margin_x = int(self.width * 0.1)
         margin_y = int(self.height * 0.1)
-        
-        # Dibujar la carretera: óvalo exterior blanco (80% width, 70% height para forma ovalada)
+
         exterior_rect = pygame.Rect(margin_x, margin_y, int(self.width * 0.8), int(self.height * 0.7))
         pygame.draw.ellipse(track, (255, 255, 255), exterior_rect)
-        
-        # Dibujar isla central: óvalo interior negro (60% width, 50% height, centrado)
+
         inner_margin_x = int(self.width * 0.2)
         inner_margin_y = int(self.height * 0.25)
         interior_rect = pygame.Rect(inner_margin_x, inner_margin_y, int(self.width * 0.6), int(self.height * 0.5))
         pygame.draw.ellipse(track, (0, 0, 0), interior_rect)
-        
+
         return track
 
+    # -----------------------
+    # Gym-like API
+    # -----------------------
     def reset(self):
         """
-        Reinicia el entorno: posición del auto y estado.
-        CORREGIDO: Devuelve observación normalizada consistente con step().
-        Devuelve solo sensores normalizados (5 valores) - gym_env agregará velocidad/ángulo.
+        Resetea el carro y estados relacionados.
+        Devuelve observación: sensores normalizados (array  of floats).
         """
         self.car.reset()
         self.done = False
-        
-        # Reiniciar sistema de vueltas
+
+        # reset local
         self.current_lap = 0
         self.checkpoints_passed = set()
         self.last_finish_cross = None
         self.finish_line_crossed = False
-        
+
         obs = self.car.get_sensor_distances(self.track)
-        # Normalizar distancias de sensores a [0, 1]
         observation = np.array(obs, dtype=np.float32) / self.car.max_sensor_distance
         return observation
 
     def step(self, action):
         """
-        Ejecuta un paso en el entorno con acción discreta.
-        action: int (0-3) o tupla (steering, throttle)
-        CORREGIDO: Validación de acciones y recompensas mejoradas.
-        Devuelve: (observación normalizada, recompensa, done, info)
+        Ejecuta acción, actualiza auto y retorna (obs, reward, done, info).
+        action: int 0..3 o tupla/lista (steering, throttle)
         """
-        # Guardar posición anterior para detectar cruces
         prev_pos = (self.car.x, self.car.y)
-        
-        # Validar acción
+
+        # Mapear acciones discretas a (steer, throttle)
         if isinstance(action, int):
-            if not 0 <= action < 4:
-                raise ValueError(f"Acción inválida: {action}. Debe estar en [0, 3]")
+            if not (0 <= action < 4):
+                raise ValueError(f"Acción inválida: {action}")
             actions_map = [
                 (0, 0),   # 0: nada
                 (0, 1),   # 1: acel
@@ -117,259 +224,302 @@ class Environment:
             action = actions_map[action]
         elif isinstance(action, (list, tuple)):
             if len(action) != 2:
-                raise ValueError(f"Acción debe tener 2 elementos, recibió {len(action)}")
+                raise ValueError("Acción debe tener 2 elementos (steer, throttle)")
         else:
-            raise TypeError(f"Acción debe ser int o tupla, recibió {type(action)}")
-        
-        # Aplicar acción y actualizar auto
+            raise TypeError("Acción debe ser int o tupla/lista")
+
+        # Aplicar acción y actualizar vehicle
         self.car.apply_action(action)
         self.car.update()
-        
-        # Posición actual
+
         curr_pos = (self.car.x, self.car.y)
-        
-        # Calcular observación normalizada (solo sensores)
+
         obs = self.car.get_sensor_distances(self.track)
         observation = np.array(obs, dtype=np.float32) / self.car.max_sensor_distance
-        
-        # Verificar colisión
+
         collision = self._check_collision()
-        
-        # Variables para tracking
+
         lap_completed = False
         checkpoint_passed = False
-        
-        # MEJORADO: Sistema de recompensas más informativo
+
         if collision:
-            reward = -100.0  # Penalización fuerte por choque
+            reward = -100.0
             self.done = True
         else:
-            # Recompensa base proporcional a velocidad (fomenta ir rápido)
-            reward = self.car.speed / self.car.max_speed
-            
-            # Verificar cruce de checkpoints
+            # Recompensa base por velocidad (normalizada)
+            # Si car.max_speed == 0 (defecto raro), protegemos
+            try:
+                base_speed_reward = (self.car.speed / self.car.max_speed) if self.car.max_speed != 0 else 0.0
+            except Exception:
+                base_speed_reward = 0.0
+            reward = base_speed_reward
+            reward += 0.5  # bono de supervivencia por paso
+
+            # Checkpoints
             if self.checkpoints:
-                for i, checkpoint in enumerate(self.checkpoints):
+                for i, cp in enumerate(self.checkpoints):
                     if i not in self.checkpoints_passed:
                         if self._check_checkpoint_crossing(i, prev_pos, curr_pos):
                             self.checkpoints_passed.add(i)
-                            reward += 10.0  # Bonus por checkpoint
                             checkpoint_passed = True
-                            print(f"✓ Checkpoint {i+1}/{len(self.checkpoints)} pasado!")
-            
-            # Verificar cruce de línea de meta
+                            reward += 10.0
+                            # Debug
+                            # print(f"[Env] Checkpoint {i} pasado por auto en {curr_pos}")
+
+            # Finish line
             if self.finish_line:
                 if self._check_finish_line_crossing(prev_pos, curr_pos):
-                    # Solo cuenta si pasó todos los checkpoints
+                    # Solo si pasó todos los checkpoints
                     if len(self.checkpoints_passed) == len(self.checkpoints):
                         self.current_lap += 1
                         lap_completed = True
-                        reward += 50.0  # Gran bonus por completar vuelta
-                        print(f"✓ ¡Vuelta {self.current_lap} completada!")
-                        
-                        # Reiniciar checkpoints para próxima vuelta
+                        reward += 50.0
+                        # reset checkpoints
                         self.checkpoints_passed = set()
-                        
-                        # Verificar si completó todas las vueltas requeridas
+                        # debug
+                        # print(f"[Env] Vuelta completada: {self.current_lap}/{self.required_laps}")
+
                         if self.current_lap >= self.required_laps:
-                            reward += 100.0  # Bonus extra por completar todas las vueltas
+                            reward += 100.0
                             self.done = True
-                            print(f"✓ ¡Todas las vueltas completadas! ({self.required_laps})")
-            
-            # Penalizar si está muy cerca de bordes (sensor < 20% de max)
-            min_sensor_dist = min(obs)
+                    else:
+                        # cruzó meta sin checkpoints -> pequeño bonus
+                        reward += 5.0
+
+            # Penalización por proximidad a bordes (sensores)
+            try:
+                min_sensor_dist = min(obs)
+            except Exception:
+                min_sensor_dist = 0.0
             if min_sensor_dist < self.car.max_sensor_distance * 0.2:
-                reward -= 0.5  # Penalización por proximidad peligrosa
-            
-            # Bonus por mantener velocidad alta sin estar cerca de bordes
-            if self.car.speed > self.car.max_speed * 0.7 and min_sensor_dist > self.car.max_sensor_distance * 0.3:
-                reward += 0.5
-            
-            # Aplicar efecto de zonas especiales
+                reward -= 0.5
+            elif min_sensor_dist > self.car.max_sensor_distance * 0.5:
+                reward += 0.2
+
+            # Aplicar efecto de zona (si existe)
             zone_effect = self._get_zone_effect(curr_pos)
-            if zone_effect != 1.0:
-                self.car.speed *= zone_effect
-                self.car.speed = min(self.car.speed, self.car.max_speed)
-        
+            # Evitamos modificar de forma acumulativa la velocidad de manera incontrolada:
+            # aplicamos multiplicador temporal sobre speed para calcular reward/efecto, y lo dejamos
+            # en un rango sensato.
+            try:
+                if zone_effect != 1.0:
+                    # limitar efecto de velocidad para que no exceda max_speed
+                    new_speed = self.car.speed * zone_effect
+                    self.car.speed = max(0.0, min(new_speed, getattr(self.car, 'max_speed', new_speed)))
+            except Exception:
+                pass
+
         info = {
             'position': (self.car.x, self.car.y),
-            'angle': self.car.angle,
-            'speed': self.car.speed,
-            'min_sensor': min(obs) if not collision else 0,
+            'angle': getattr(self.car, 'angle', 0.0),
+            'speed': getattr(self.car, 'speed', 0.0),
+            'min_sensor': min(obs) if not collision else 0.0,
             'current_lap': self.current_lap,
             'checkpoints_passed': len(self.checkpoints_passed),
             'lap_completed': lap_completed,
             'checkpoint_passed': checkpoint_passed
         }
-        
+
         return observation, reward, self.done, info
 
+    # -----------------------
+    # Colisión robusta
+    # -----------------------
     def _check_collision(self):
         """
-        Verifica si el centro del auto está en un píxel de borde negro.
-        MEJORADO: Verifica múltiples puntos del auto para mejor detección.
+        Chequea colisión leyendo colores de píxeles.
+        Usa color[:3] para ser robusto frente a surfaces con alfa.
+        Revisa centro + esquinas rotadas para mayor precisión.
         """
-        # Verificar centro del auto
-        px, py = int(self.car.x), int(self.car.y)
-        if (px < 0 or px >= self.width or py < 0 or py >= self.height):
+        px = int(self.car.x)
+        py = int(self.car.y)
+        if px < 0 or px >= self.width or py < 0 or py >= self.height:
             return True
-        
-        if self.track.get_at((px, py)) == (0, 0, 0):
+
+        try:
+            color = self.track.get_at((px, py))[:3]
+        except Exception:
+            # Si falla get_at (por formato), consideramos colisión por seguridad
             return True
-        
-        # Verificar esquinas del auto (aproximación simple)
-        half_width = self.car.width_car / 2
-        half_height = self.car.height_car / 2
-        
-        # Calcular posiciones de esquinas rotadas
+
+        if color == (0, 0, 0):
+            return True
+
+        # Revisar esquinas del rectángulo del auto (aprox)
+        half_w = getattr(self.car, 'width_car', 10) / 2.0
+        half_h = getattr(self.car, 'height_car', 20) / 2.0
+
         cos_a = math.cos(self.car.angle)
         sin_a = math.sin(self.car.angle)
-        
+
         corners = [
-            (half_width, half_height),
-            (-half_width, half_height),
-            (half_width, -half_height),
-            (-half_width, -half_height)
+            (half_w, half_h),
+            (-half_w, half_h),
+            (half_w, -half_h),
+            (-half_w, -half_h)
         ]
-        
+
         for dx, dy in corners:
-            # Rotar y trasladar
             rx = self.car.x + dx * cos_a - dy * sin_a
             ry = self.car.y + dx * sin_a + dy * cos_a
-            
-            px_corner = int(rx)
-            py_corner = int(ry)
-            
-            # Verificar límites
-            if (px_corner < 0 or px_corner >= self.width or 
-                py_corner < 0 or py_corner >= self.height):
+            ix = int(rx)
+            iy = int(ry)
+            if ix < 0 or ix >= self.width or iy < 0 or iy >= self.height:
                 return True
-            
-            # Verificar colisión
-            if self.track.get_at((px_corner, py_corner)) == (0, 0, 0):
+            try:
+                c = self.track.get_at((ix, iy))[:3]
+            except Exception:
                 return True
-        
+            if c == (0, 0, 0):
+                return True
+
         return False
 
+    # -----------------------
+    # Line crossing utilities
+    # -----------------------
     def _check_line_crossing(self, line, prev_pos, curr_pos):
         """
-        Verifica si el auto cruzó una línea entre dos posiciones.
-        line: (x1, y1, x2, y2)
-        Retorna: True si cruzó, False si no
+        Detección de intersección entre segmento prev_pos-curr_pos y línea x1y1-x2y2.
         """
         if not line:
             return False
-        
+
         x1, y1, x2, y2 = line[:4]
-        px1, py1 = prev_pos
-        px2, py2 = curr_pos
-        
-        # Algoritmo de intersección de segmentos
-        def ccw(A, B, C):
-            return (C[1]-A[1]) * (B[0]-A[0]) > (B[1]-A[1]) * (C[0]-A[0])
-        
         A = (x1, y1)
         B = (x2, y2)
-        C = (px1, py1)
-        D = (px2, py2)
-        
-        return ccw(A,C,D) != ccw(B,C,D) and ccw(A,B,C) != ccw(A,B,D)
-    
+        C = (prev_pos[0], prev_pos[1])
+        D = (curr_pos[0], curr_pos[1])
+
+        def ccw(P, Q, R):
+            return (R[1] - P[1]) * (Q[0] - P[0]) > (Q[1] - P[1]) * (R[0] - P[0])
+
+        return (ccw(A, C, D) != ccw(B, C, D)) and (ccw(A, B, C) != ccw(A, B, D))
+
     def _check_finish_line_crossing(self, prev_pos, curr_pos):
-        """Verifica si cruzó la línea de meta en la dirección correcta"""
+        """
+        Cruce de línea de meta con verificación de dirección.
+        Retorna True solo si cruza en la dirección correcta (producto cruz positivo).
+        """
         if not self.finish_line:
             return False
-        
+
         if self._check_line_crossing(self.finish_line, prev_pos, curr_pos):
-            # Verificar dirección (producto cruz)
-            x1, y1, x2, y2, line_angle = self.finish_line
-            
-            # Vector de la línea
+            x1, y1, x2, y2, *rest = self.finish_line
+            # vector línea
             line_dx = x2 - x1
             line_dy = y2 - y1
-            
-            # Vector de movimiento del auto
+            # vector movimiento
             move_dx = curr_pos[0] - prev_pos[0]
             move_dy = curr_pos[1] - prev_pos[1]
-            
-            # Producto cruz (positivo = dirección correcta)
             cross = line_dx * move_dy - line_dy * move_dx
-            
-            return cross > 0  # Solo cuenta si cruza en dirección correcta
-        
+            return cross > 0
         return False
-    
+
     def _check_checkpoint_crossing(self, checkpoint_idx, prev_pos, curr_pos):
-        """Verifica si cruzó un checkpoint específico"""
-        if checkpoint_idx >= len(self.checkpoints):
+        if checkpoint_idx < 0 or checkpoint_idx >= len(self.checkpoints):
             return False
-        
-        checkpoint = self.checkpoints[checkpoint_idx]
-        return self._check_line_crossing(checkpoint, prev_pos, curr_pos)
-    
+        cp = self.checkpoints[checkpoint_idx]
+        return self._check_line_crossing(cp, prev_pos, curr_pos)
+
+    # -----------------------
+    # Zonas por color
+    # -----------------------
     def _get_zone_effect(self, pos):
-        """Obtiene el efecto de zona en la posición actual"""
-        if not self.speed_zones and not self.slow_zones:
-            return 1.0  # Sin efecto
-        
-        px, py = int(pos[0]), int(pos[1])
-        if px < 0 or px >= self.width or py < 0 or py >= self.height:
-            return 1.0
-        
-        # Verificar speed zone (verde)
+        """
+        Retorna multiplicador de velocidad según zona:
+         - speed zone (verde): 1.5
+         - slow zone (amarillo): 0.7
+         - fallback: 1.0
+        Prioriza surfaces separadas (speed_zones/slow_zones), si no existen usa color en track.
+        """
+        px = int(max(0, min(self.width - 1, pos[0])))
+        py = int(max(0, min(self.height - 1, pos[1])))
+
+        # speed_zones surface
         if self.speed_zones:
             try:
-                color = self.speed_zones.get_at((px, py))
-                if color[:3] == (0, 255, 0):  # Verde
-                    return 1.5  # 50% más rápido
-            except:
+                c = self.speed_zones.get_at((px, py))[:3]
+                if c == (0, 255, 0):
+                    return 1.5
+            except Exception:
                 pass
-        
-        # Verificar slow zone (amarillo)
+
         if self.slow_zones:
             try:
-                color = self.slow_zones.get_at((px, py))
-                if color[:3] == (255, 255, 0):  # Amarillo
-                    return 0.7  # 30% más lento
-            except:
+                c = self.slow_zones.get_at((px, py))[:3]
+                if c == (255, 255, 0):
+                    return 0.7
+            except Exception:
                 pass
-        
+
+        # Fallback a color en track (combinada)
+        try:
+            c = self.track.get_at((px, py))[:3]
+            if c == (0, 255, 0):
+                return 1.5
+            if c == (255, 255, 0):
+                return 0.7
+        except Exception:
+            pass
+
         return 1.0
 
+    # -----------------------
+    # Render
+    # -----------------------
     def render(self, screen):
         """
-        Renderiza el entorno en la pantalla PyGame.
-        - Blit pista.
-        - Dibuja auto y sensores.
-        screen: Surface de PyGame.
+        Renderiza la pista, capas especiales, checkpoints, finish line y el auto.
         """
-        # Blit la pista de fondo
-        screen.blit(self.track, (0, 0))
-        
-        # Dibujar capas especiales si existen
+        if self.track:
+            try:
+                screen.blit(self.track, (0, 0))
+            except Exception:
+                # si falla blit, rellenamos fondo de forma segura
+                screen.fill((0, 0, 0))
+        else:
+            screen.fill((0, 0, 0))
+
+        # capas especiales
         if self.speed_zones:
-            screen.blit(self.speed_zones, (0, 0))
+            try:
+                screen.blit(self.speed_zones, (0, 0))
+            except Exception:
+                pass
         if self.slow_zones:
-            screen.blit(self.slow_zones, (0, 0))
-        
-        # Dibujar checkpoints
+            try:
+                screen.blit(self.slow_zones, (0, 0))
+            except Exception:
+                pass
+
+        # Draw checkpoints (si existen)
         if self.checkpoints:
             for i, cp in enumerate(self.checkpoints):
                 color = (0, 255, 0) if i in self.checkpoints_passed else (0, 100, 255)
                 pygame.draw.line(screen, color, (cp[0], cp[1]), (cp[2], cp[3]), 8)
-        
-        # Dibujar línea de meta
+
+        # Draw finish line
         if self.finish_line:
-            x1, y1, x2, y2 = self.finish_line[:4]
-            pygame.draw.line(screen, (255, 0, 0), (x1, y1), (x2, y2), 10)
-        
-        # Dibujar auto y sensores
-        self.car.draw(screen)
-        self.car.draw_sensors(screen)
-        
-        # Mostrar info de vueltas si hay finish line
+            try:
+                fx1, fy1, fx2, fy2 = self.finish_line[:4]
+                pygame.draw.line(screen, (255, 0, 0), (fx1, fy1), (fx2, fy2), 10)
+            except Exception:
+                pass
+
+        # Draw car + sensors using Car class methods
+        try:
+            self.car.draw(screen)
+            self.car.draw_sensors(screen)
+        except Exception:
+            pass
+
+        # Mostrar info de vueltas
         if self.finish_line:
-            font = pygame.font.Font(None, 28)
-            lap_text = font.render(f"Vuelta: {self.current_lap}/{self.required_laps}", True, (255, 255, 255))
-            pygame.draw.rect(screen, (0, 0, 0), (10, 50, 250, 35))
-            screen.blit(lap_text, (15, 55))
+            try:
+                font = pygame.font.Font(None, 28)
+                lap_text = font.render(f"Vuelta: {self.current_lap}/{self.required_laps}", True, (255, 255, 255))
+                pygame.draw.rect(screen, (0, 0, 0), (10, 50, 250, 35))
+                screen.blit(lap_text, (15, 55))
+            except Exception:
+                pass

@@ -1,10 +1,3 @@
-#Track Selector - Menú gráfico para seleccionar pistas guardadas
-#- Muestra miniaturas de pistas disponibles
-#- Permite seleccionar pista para entrenamiento
-#- Opción para eliminar pistas
-#- Botón para crear nueva pista
-
-
 import pygame
 import json
 import os
@@ -49,12 +42,12 @@ class TrackSelector:
         self.scroll_offset = 0
         self.max_scroll = 0
         
-        # Botones principales
+        # Botones
         self.create_new_button = None
         self.start_training_button = None
         self.delete_mode = False
         
-        # Cargar pistas disponibles
+        # Cargar pistas
         self.load_tracks()
         self.create_ui()
         
@@ -67,12 +60,10 @@ class TrackSelector:
     def load_tracks(self):
         """Carga todas las pistas disponibles"""
         self.tracks = []
-        
         if not os.path.exists('tracks'):
             os.makedirs('tracks')
             return
         
-        # Buscar archivos JSON (metadata)
         track_files = [f for f in os.listdir('tracks') if f.endswith('.json')]
         
         for json_file in track_files:
@@ -80,10 +71,13 @@ class TrackSelector:
                 with open(f"tracks/{json_file}", 'r') as f:
                     metadata = json.load(f)
                     
-                    # Verificar que existan los archivos necesarios
-                    track_name = metadata['name']
-                    track_path = f"tracks/{track_name}.png"
-                    thumb_path = f"tracks/{track_name}_thumb.png"
+                    # Nombre base (sin extensión)
+                    track_name = metadata.get('name', json_file.replace('.json', ''))
+                    track_base_path = f"tracks/{track_name}"
+                    
+                    # Rutas corregidas
+                    track_path = f"{track_base_path}_track.png"
+                    thumb_path = f"{track_base_path}_thumb.png"
                     
                     if os.path.exists(track_path):
                         # Cargar thumbnail
@@ -99,322 +93,186 @@ class TrackSelector:
                             'name': track_name,
                             'metadata': metadata,
                             'thumbnail': thumbnail,
-                            'path': track_path
+                            'path': track_base_path  # ← Base sin extensión
                         })
             except Exception as e:
                 print(f"Error cargando pista {json_file}: {e}")
         
-        # Ordenar por fecha de creación (más reciente primero)
+        # Ordenar por fecha
         self.tracks.sort(key=lambda x: x['metadata'].get('created', ''), reverse=True)
     
     def create_ui(self):
-        """Crea los elementos de la interfaz"""
-        # Botón para crear nueva pista
+        """Crea botones y grid de pistas"""
         self.create_new_button = {
             'rect': pygame.Rect(50, self.height - 80, 250, 60),
             'label': 'Crear Nueva Pista',
             'color': GREEN
         }
-        
-        # Botón para iniciar entrenamiento
         self.start_training_button = {
             'rect': pygame.Rect(self.width - 300, self.height - 80, 250, 60),
             'label': 'Iniciar Entrenamiento',
             'color': BLUE
         }
-        
-        # Botón para modo eliminar
         self.delete_button = {
             'rect': pygame.Rect(self.width // 2 - 125, self.height - 80, 250, 60),
             'label': 'Modo Eliminar',
             'color': RED
         }
         
-        # Crear botones para cada pista (grid de 4 columnas)
-        self.track_buttons = []
         cols = 4
-        thumb_width = 200
-        thumb_height = 150
-        padding = 30
+        thumb_w, thumb_h, pad = 200, 150, 30
         start_y = 120
+        self.track_buttons = []
         
         for i, track in enumerate(self.tracks):
-            row = i // cols
-            col = i % cols
-            
-            x = 50 + col * (thumb_width + padding)
-            y = start_y + row * (thumb_height + padding + 60)
+            row, col = divmod(i, cols)
+            x = 50 + col * (thumb_w + pad)
+            y = start_y + row * (thumb_h + pad + 60)
             
             self.track_buttons.append({
-                'rect': pygame.Rect(x, y, thumb_width, thumb_height + 60),
+                'rect': pygame.Rect(x, y, thumb_w, thumb_h + 60),
                 'track': track,
-                'thumbnail_rect': pygame.Rect(x, y, thumb_width, thumb_height),
-                'delete_rect': pygame.Rect(x + thumb_width - 30, y, 30, 30)
+                'thumbnail_rect': pygame.Rect(x, y, thumb_w, thumb_h),
+                'delete_rect': pygame.Rect(x + thumb_w - 30, y, 30, 30)
             })
         
-        # Calcular scroll máximo
         if self.track_buttons:
             last_button = self.track_buttons[-1]
             self.max_scroll = max(0, last_button['rect'].bottom - (self.height - 120))
     
     def handle_click(self, pos):
-        """Maneja clicks del mouse"""
         adjusted_pos = (pos[0], pos[1] + self.scroll_offset)
         
-        # Click en botón crear nueva
         if self.create_new_button['rect'].collidepoint(pos):
             self.launch_track_editor()
             return
-        
-        # Click en botón iniciar entrenamiento
         if self.start_training_button['rect'].collidepoint(pos):
             if self.selected_track:
                 self.running = False
             return
-        
-        # Click en botón modo eliminar
         if self.delete_button['rect'].collidepoint(pos):
             self.delete_mode = not self.delete_mode
             return
         
-        # Click en pistas
         for button in self.track_buttons:
-            # Ajustar rect para scroll
             adjusted_rect = button['rect'].copy()
             adjusted_rect.y -= self.scroll_offset
-            
             if adjusted_rect.collidepoint(pos):
                 if self.delete_mode:
-                    # Modo eliminar
                     self.delete_track(button['track'])
                 else:
-                    # Seleccionar pista
                     self.selected_track = button['track']
                 return
     
     def handle_scroll(self, y):
-        """Maneja el scroll del mouse"""
         self.scroll_offset = max(0, min(self.scroll_offset - y * 30, self.max_scroll))
     
     def delete_track(self, track):
-        """Elimina una pista"""
+        """Elimina los archivos relacionados a una pista"""
         try:
-            track_name = track['name']
-            
-            # Confirmar eliminación
-            print(f"Eliminando pista: {track_name}")
-            
-            # Eliminar archivos
-            files_to_delete = [
-                f"tracks/{track_name}.png",
-                f"tracks/{track_name}.json",
-                f"tracks/{track_name}_thumb.png"
+            name = track['name']
+            print(f"Eliminando pista: {name}")
+            files = [
+                f"tracks/{name}.json",
+                f"tracks/{name}_track.png",
+                f"tracks/{name}_thumb.png",
+                f"tracks/{name}_checkpoint.png",
+                f"tracks/{name}_finish.png",
+                f"tracks/{name}_speed.png",
+                f"tracks/{name}_slow.png",
             ]
-            
-            for file_path in files_to_delete:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            
-            # Recargar pistas
+            for fpath in files:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
             self.load_tracks()
             self.create_ui()
-            
-            # Deseleccionar si era la pista seleccionada
-            if self.selected_track and self.selected_track['name'] == track_name:
+            if self.selected_track and self.selected_track['name'] == name:
                 self.selected_track = None
-            
-            print(f"✓ Pista eliminada: {track_name}")
-            
+            print(f"✓ Pista eliminada: {name}")
         except Exception as e:
             print(f"Error eliminando pista: {e}")
     
     def launch_track_editor(self):
-        """Lanza el editor de pistas"""
+        """Abre el editor de pistas"""
         print("Lanzando editor de pistas...")
         pygame.quit()
-        
-        # Importar y ejecutar el editor
         try:
             import track_editor
             editor = track_editor.TrackEditor()
             editor.run()
         except Exception as e:
             print(f"Error lanzando editor: {e}")
-        
-        # Reiniciar selector después de cerrar editor
         self.__init__(self.width, self.height)
     
+    def draw_button(self, button, enabled=True):
+        color = button['color'] if enabled else GRAY
+        pygame.draw.rect(self.screen, color, button['rect'])
+        pygame.draw.rect(self.screen, WHITE, button['rect'], 2)
+        text = self.small_font.render(button['label'], True, WHITE)
+        text_rect = text.get_rect(center=button['rect'].center)
+        self.screen.blit(text, text_rect)
+    
     def draw(self):
-        """Dibuja la interfaz"""
         self.screen.fill(DARK_GRAY)
-        
-        # Título
         title = self.title_font.render("Selector de Pistas", True, YELLOW)
-        title_rect = title.get_rect(center=(self.width // 2, 50))
-        self.screen.blit(title, title_rect)
+        self.screen.blit(title, title.get_rect(center=(self.width//2, 50)))
         
-        # Instrucciones
-        if self.delete_mode:
-            instruction = self.small_font.render("MODO ELIMINAR: Click en una pista para eliminarla", True, RED)
-        else:
-            instruction = self.small_font.render("Selecciona una pista para entrenar", True, WHITE)
-        inst_rect = instruction.get_rect(center=(self.width // 2, 90))
-        self.screen.blit(instruction, inst_rect)
-        
-        # Dibujar pistas
         for button in self.track_buttons:
-            # Ajustar posición por scroll
-            adjusted_rect = button['rect'].copy()
-            adjusted_rect.y -= self.scroll_offset
-            
-            # Solo dibujar si está visible
-            if adjusted_rect.bottom < 0 or adjusted_rect.top > self.height - 120:
+            rect = button['rect'].copy()
+            rect.y -= self.scroll_offset
+            if rect.bottom < 0 or rect.top > self.height - 120:
                 continue
-            
             track = button['track']
-            
-            # Fondo del botón
-            is_selected = (self.selected_track and 
-                          self.selected_track['name'] == track['name'])
-            
-            border_color = YELLOW if is_selected else WHITE
-            border_width = 4 if is_selected else 2
-            
-            pygame.draw.rect(self.screen, BLACK, adjusted_rect)
-            pygame.draw.rect(self.screen, border_color, adjusted_rect, border_width)
-            
-            # Thumbnail
+            selected = self.selected_track and self.selected_track['name'] == track['name']
+            border_color = YELLOW if selected else WHITE
+            pygame.draw.rect(self.screen, BLACK, rect)
+            pygame.draw.rect(self.screen, border_color, rect, 4 if selected else 2)
             thumb_rect = button['thumbnail_rect'].copy()
             thumb_rect.y -= self.scroll_offset
             self.screen.blit(track['thumbnail'], thumb_rect)
-            
-            # Nombre de la pista
             name_text = self.small_font.render(track['name'], True, WHITE)
-            name_rect = name_text.get_rect(
-                centerx=adjusted_rect.centerx,
-                top=thumb_rect.bottom + 5
-            )
+            name_rect = name_text.get_rect(centerx=rect.centerx, top=thumb_rect.bottom + 5)
             self.screen.blit(name_text, name_rect)
-            
-            # Fecha de creación
-            created = track['metadata'].get('created', 'N/A')
-            if created != 'N/A':
-                try:
-                    date_obj = datetime.strptime(created, "%Y%m%d_%H%M%S")
-                    date_str = date_obj.strftime("%d/%m/%Y %H:%M")
-                except:
-                    date_str = created
-            else:
-                date_str = 'N/A'
-            
-            date_text = self.small_font.render(date_str, True, LIGHT_GRAY)
-            date_rect = date_text.get_rect(
-                centerx=adjusted_rect.centerx,
-                top=name_rect.bottom + 2
-            )
-            self.screen.blit(date_text, date_rect)
-            
-            # Botón eliminar (X roja en esquina)
-            if self.delete_mode:
-                delete_rect = button['delete_rect'].copy()
-                delete_rect.y -= self.scroll_offset
-                pygame.draw.circle(self.screen, RED, delete_rect.center, 15)
-                pygame.draw.circle(self.screen, WHITE, delete_rect.center, 15, 2)
-                
-                # X
-                x_font = pygame.font.Font(None, 24)
-                x_text = x_font.render("X", True, WHITE)
-                x_rect = x_text.get_rect(center=delete_rect.center)
-                self.screen.blit(x_text, x_rect)
         
-        # Barra de scroll (si es necesaria)
-        if self.max_scroll > 0:
-            scroll_bar_height = max(50, (self.height - 200) * (self.height - 200) / (self.height - 200 + self.max_scroll))
-            scroll_bar_y = 120 + (self.scroll_offset / self.max_scroll) * (self.height - 200 - scroll_bar_height)
-            
-            pygame.draw.rect(self.screen, GRAY, 
-                           (self.width - 20, 120, 15, self.height - 200))
-            pygame.draw.rect(self.screen, WHITE,
-                           (self.width - 20, scroll_bar_y, 15, scroll_bar_height))
-        
-        # Botones inferiores
         self.draw_button(self.create_new_button)
-        self.draw_button(self.start_training_button, 
-                        enabled=(self.selected_track is not None))
-        
-        # Botón modo eliminar
+        self.draw_button(self.start_training_button, enabled=(self.selected_track is not None))
         delete_btn = self.delete_button.copy()
         if self.delete_mode:
             delete_btn['color'] = ORANGE
             delete_btn['label'] = 'Modo Normal'
         self.draw_button(delete_btn)
-        
-        # Mensaje si no hay pistas
-        if len(self.tracks) == 0:
-            no_tracks = self.font.render("No hay pistas guardadas", True, LIGHT_GRAY)
-            no_tracks_rect = no_tracks.get_rect(center=(self.width // 2, self.height // 2 - 50))
-            self.screen.blit(no_tracks, no_tracks_rect)
-            
-            hint = self.small_font.render("Haz click en 'Crear Nueva Pista' para empezar", True, LIGHT_GRAY)
-            hint_rect = hint.get_rect(center=(self.width // 2, self.height // 2))
-            self.screen.blit(hint, hint_rect)
-    
-    def draw_button(self, button, enabled=True):
-        """Dibuja un botón"""
-        color = button['color'] if enabled else GRAY
-        text_color = WHITE if enabled else DARK_GRAY
-        
-        # Fondo
-        pygame.draw.rect(self.screen, color, button['rect'])
-        pygame.draw.rect(self.screen, WHITE, button['rect'], 2)
-        
-        # Texto
-        text = self.small_font.render(button['label'], True, text_color)
-        text_rect = text.get_rect(center=button['rect'].center)
-        self.screen.blit(text, text_rect)
+        pygame.display.flip()
     
     def run(self):
-        """Loop principal del selector"""
         while self.running:
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
                     self.running = False
                     self.selected_track = None
-                
-                elif event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        self.running = False
-                        self.selected_track = None
-                
-                elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 1:  # Click izquierdo
-                        self.handle_click(event.pos)
-                    elif event.button == 4:  # Scroll up
+                elif e.type == pygame.KEYDOWN and e.key == pygame.K_ESCAPE:
+                    self.running = False
+                    self.selected_track = None
+                elif e.type == pygame.MOUSEBUTTONDOWN:
+                    if e.button == 1:
+                        self.handle_click(e.pos)
+                    elif e.button == 4:
                         self.handle_scroll(1)
-                    elif event.button == 5:  # Scroll down
+                    elif e.button == 5:
                         self.handle_scroll(-1)
-                
-                elif event.type == pygame.MOUSEWHEEL:
-                    self.handle_scroll(event.y)
-            
             self.draw()
-            pygame.display.flip()
             self.clock.tick(60)
-        
         pygame.quit()
         return self.selected_track
 
 
 def select_track():
-    """Función helper para seleccionar una pista"""
     selector = TrackSelector()
-    selected = selector.run()
-    return selected
+    return selector.run()
 
 
 if __name__ == "__main__":
-    selected_track = select_track()
-    if selected_track:
-        print(f"\n✓ Pista seleccionada: {selected_track['name']}")
+    track = select_track()
+    if track:
+        print(f"✓ Pista seleccionada: {track['name']}")
     else:
-        print("\n✗ No se seleccionó ninguna pista")
+        print("✗ No se seleccionó ninguna pista")

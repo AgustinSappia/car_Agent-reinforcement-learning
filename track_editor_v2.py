@@ -947,6 +947,9 @@ class TrackEditorV2:
                     if event.button == 1:
                         self.is_painting = False
                         dragging_slider = False
+                    if event.button == 3:
+                        self.is_painting = False
+                        dragging_slider = False
                 
                 elif event.type == pygame.MOUSEMOTION:
                     if dragging_slider:
