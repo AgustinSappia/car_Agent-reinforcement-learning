@@ -575,9 +575,10 @@ class TrackEditorV2:
         
         # Metadata - Convertir coordenadas a listas para JSON
         # IMPORTANTE: Guardar coordenadas exactas sin transformaciones
+        #dimensiones del canvas 1570 x 1080
         metadata = {
             'name': track_name,
-            'width': self.canvas_width,
+            'width': self.canvas_width , 
             'height': self.canvas_height,
             'spawn_point': list(self.spawn_point) if self.spawn_point else None,
             'finish_line': list(self.finish_line) if self.finish_line else None,

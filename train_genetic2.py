@@ -61,7 +61,7 @@ p_time = 100.0  # Penalización por timeout (antes 50.0)
 
 timeOut = 3000  # Máximo de steps por agente antes de morir (antes 10000)
 
-correccion = 150  # Corrección para dibujar línea de meta (si está desfasada)
+correccion = 0  # Corrección para dibujar línea de meta (si está desfasada)
 
 class GeneticAgent:
     """Agente individual con su propia red neuronal"""
@@ -1083,6 +1083,22 @@ if __name__ == "__main__":
     else:
         print(f"Modo: Pista procedural por defecto")
     print(f"{'='*60}\n")
+    
+    # --- INICIO DE LA SOLUCIÓN ---
 
-    trainer = GeneticTrainer(width=1920, height=1080, custom_track_data=custom_track_data)
+    # 1. Definir un tamaño por defecto en caso de que la pista falle en cargar
+    screen_width = 1920
+    screen_height = 1080
+
+    # 2. Si la pista personalizada se cargó correctamente, usar sus dimensiones
+    if custom_track_data:
+        screen_width = custom_track_data.get('width', 1920)   # Obtiene 1570 de tus datos
+        screen_height = custom_track_data.get('height', 1080) # Obtiene 1080 de tus datos
+        print(f"✓ Usando dimensiones de la pista cargada: {screen_width}x{screen_height}")
+
+    # 3. Pasar las dimensiones CORRECTAS al crear el entrenador
+    trainer = GeneticTrainer(width=screen_width, height=screen_height, custom_track_data=custom_track_data)
+    
+    # --- FIN DE LA SOLUCIÓN ---
+
     trainer.run()
