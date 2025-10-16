@@ -51,11 +51,12 @@ class Environment:
                     print(f"[Environment] ✗ track_layer NO encontrado, usando pista por defecto")
                     self.track = self._create_track()
 
+                # IMPORTANTE: Usar coordenadas del JSON, NO las imágenes PNG de líneas
                 finish = custom_track_data.get('finish_line')
                 if finish:
                     # finish puede venir como (x1,y1,x2,y2,angle) o similar
                     self.finish_line = tuple(finish)
-                    print(f"[Environment] ✓ finish_line: {self.finish_line}")
+                    print(f"[Environment] ✓ finish_line (coordenadas): {self.finish_line}")
                 else:
                     self.finish_line = None
                     print(f"[Environment] ⚠ finish_line no definida")
@@ -64,7 +65,9 @@ class Environment:
                 if cps:
                     # normalizar a lista de tuplas (x1,y1,x2,y2)
                     self.checkpoints = [tuple(cp) for cp in cps]
-                    print(f"[Environment] ✓ {len(self.checkpoints)} checkpoints cargados")
+                    print(f"[Environment] ✓ {len(self.checkpoints)} checkpoints cargados (coordenadas)")
+                    for i, cp in enumerate(self.checkpoints):
+                        print(f"[Environment]   - Checkpoint {i+1}: ({cp[0]:.1f}, {cp[1]:.1f}) -> ({cp[2]:.1f}, {cp[3]:.1f})")
                 else:
                     self.checkpoints = []
                     print(f"[Environment] ⚠ No hay checkpoints definidos")
@@ -85,6 +88,12 @@ class Environment:
 
                 self.required_laps = int(custom_track_data.get('required_laps', 1))
                 print(f"[Environment] ✓ Vueltas requeridas: {self.required_laps}")
+                
+                # Verificar spawn_point
+                spawn = custom_track_data.get('spawn_point')
+                if spawn:
+                    print(f"[Environment] ✓ Spawn point: ({spawn[0]:.1f}, {spawn[1]:.1f}, {math.degrees(spawn[2]):.1f}°)")
+                
                 print(f"[Environment] ✓ Pista personalizada cargada exitosamente!")
                 
             except Exception as e:

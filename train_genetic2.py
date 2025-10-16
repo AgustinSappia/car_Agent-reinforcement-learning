@@ -41,6 +41,27 @@ AGENT_COLORS = [
     (128, 0, 255),
 ]
 
+# Recompensas
+r_exist = 0.05  # Recompensa por existir cada step (antes 1.0)
+r_checkpoint = 200.0  # Recompensa por pasar checkpoint (antes 100.0)
+r_meta = 400.0  # Recompensa por cruzar meta (antes 200.0)
+r_win = 2000.0  # Recompensa por completar todas las vueltas (antes 1000.0)
+r_speedZone = 0.5  # Recompensa por estar en zona rápida (antes 0.5) 
+r_velocidad = 0.01  # Recompensa por velocidad (antes 0.5) multiplicado por la velocidad
+r_progress = 0.3  # Recompensa por alejarse del spawn (antes 0.1) multiplicado por la distancia
+
+p_quieto = 0.5  # Penalización por estar quieto, mas grande es mas penalidad (antes 1.0)
+p_trampa = 50.0  # Penalización por cruzar meta sin checkpoints (antes 50.0)
+p_rongCruce = 800  # Penalización por cruzar meta en dirección incorrecta (antes 100.0)
+p_slowZone = 0.3  # Penalización por estar en zona lenta (antes 0.3)
+p_colision = -200.0  # Penalización por colisión (antes -200.0)
+p_sensorClose = 0.2  # Penalización por sensor muy cerca (antes 0.3)
+p_sensorVClose = 0.5  # Penalización por sensor muy muy cerca (antes 0.5)
+p_time = 100.0  # Penalización por timeout (antes 50.0)
+
+timeOut = 3000  # Máximo de steps por agente antes de morir (antes 10000)
+
+correccion = 150  # Corrección para dibujar línea de meta (si está desfasada)
 
 class GeneticAgent:
     """Agente individual con su propia red neuronal"""
@@ -99,6 +120,124 @@ class GeneticAgent:
         """Carga el cerebro del agente"""
         if os.path.exists(filename):
             self.brain.load_state_dict(torch.load(filename, map_location=self.device))
+            return True
+        return False
+
+
+class AgentInfoPanel:
+    """Panel de información detallada de agentes en tiempo real"""
+    def __init__(self, x, y, width, height):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.visible = False  # Inicialmente oculto
+        self.font = pygame.font.Font(None, 16)
+        self.title_font = pygame.font.Font(None, 20)
+        self.small_font = pygame.font.Font(None, 14)
+        
+        # Botón toggle
+        self.toggle_button = pygame.Rect(x, y - 35, 120, 30)
+    
+    def toggle(self):
+        """Alterna visibilidad del panel"""
+        self.visible = not self.visible
+    
+    def draw(self, screen, agents, agent_states, generation):
+        """Dibuja el panel con información de agentes"""
+        # Dibujar botón toggle
+        button_color = GREEN if self.visible else GRAY
+        pygame.draw.rect(screen, button_color, self.toggle_button)
+        pygame.draw.rect(screen, WHITE, self.toggle_button, 2)
+        
+        button_text = self.small_font.render("Info Agentes (I)", True, WHITE)
+        text_rect = button_text.get_rect(center=self.toggle_button.center)
+        screen.blit(button_text, text_rect)
+        
+        if not self.visible:
+            return
+        
+        # Fondo del panel
+        panel_surface = pygame.Surface((self.width, self.height))
+        panel_surface.set_alpha(230)
+        panel_surface.fill((30, 30, 30))
+        screen.blit(panel_surface, (self.x, self.y))
+        
+        # Borde
+        pygame.draw.rect(screen, YELLOW, (self.x, self.y, self.width, self.height), 3)
+        
+        # Título
+        title = self.title_font.render(f"AGENTES - Gen {generation}", True, YELLOW)
+        screen.blit(title, (self.x + 10, self.y + 5))
+        
+        # Línea separadora
+        pygame.draw.line(screen, WHITE, (self.x + 5, self.y + 30), (self.x + self.width - 5, self.y + 30), 1)
+        
+        # Información de cada agente
+        y_offset = 40
+        alive_agents = [a for a in agents if a.is_alive]
+        
+        if not alive_agents:
+            no_agents_text = self.font.render("Todos los agentes han muerto", True, RED)
+            screen.blit(no_agents_text, (self.x + 10, self.y + y_offset))
+            return
+        
+        for agent in alive_agents[:8]:  # Mostrar máximo 8 agentes
+            if agent.agent_id not in agent_states:
+                continue
+                
+            st = agent_states[agent.agent_id]
+            
+            # Fondo para cada agente
+            agent_bg = pygame.Surface((self.width - 20, 85))
+            agent_bg.set_alpha(100)
+            agent_bg.fill(agent.color)
+            screen.blit(agent_bg, (self.x + 10, self.y + y_offset))
+            
+            # Borde con color del agente
+            pygame.draw.rect(screen, agent.color, 
+                           (self.x + 10, self.y + y_offset, self.width - 20, 85), 2)
+            
+            # ID y Color
+            id_text = self.font.render(f"Agente #{agent.agent_id}", True, WHITE)
+            screen.blit(id_text, (self.x + 15, self.y + y_offset + 3))
+            
+            # Fitness
+            fitness_text = self.small_font.render(f"Fitness: {agent.fitness:.1f}", True, YELLOW)
+            screen.blit(fitness_text, (self.x + 15, self.y + y_offset + 20))
+            
+            # Velocidad
+            speed_text = self.small_font.render(f"Vel: {agent.speed:.1f}/{agent.brain.state_dict()}", True, WHITE)
+            # Simplificar - solo mostrar velocidad
+            speed_text = self.small_font.render(f"Velocidad: {agent.speed:.1f}", True, WHITE)
+            screen.blit(speed_text, (self.x + 15, self.y + y_offset + 35))
+            
+            # Distancia máxima
+            max_dist_text = self.small_font.render(f"Dist Max: {st['max_distance']:.0f}px", True, WHITE)
+            screen.blit(max_dist_text, (self.x + 15, self.y + y_offset + 50))
+            
+            # Checkpoints y vueltas
+            cp_passed = sum(st['passed_checkpoints'])
+            cp_total = len(st['passed_checkpoints'])
+            laps = st['laps']
+            
+            progress_text = self.small_font.render(f"CP: {cp_passed}/{cp_total} | Vueltas: {laps}", True, GREEN)
+            screen.blit(progress_text, (self.x + 15, self.y + y_offset + 65))
+            
+            y_offset += 90
+            
+            # Si no caben más agentes, mostrar contador
+            if y_offset + 90 > self.height - 10:
+                remaining = len(alive_agents) - alive_agents.index(agent) - 1
+                if remaining > 0:
+                    more_text = self.small_font.render(f"+ {remaining} agentes más...", True, LIGHT_GRAY)
+                    screen.blit(more_text, (self.x + 15, self.y + y_offset))
+                break
+    
+    def handle_click(self, pos):
+        """Maneja clicks en el botón toggle"""
+        if self.toggle_button.collidepoint(pos):
+            self.toggle()
             return True
         return False
 
@@ -235,6 +374,11 @@ class GeneticTrainer:
         menu_width = 250
         menu_height = 300
         self.menu = ControlMenu(width - menu_width - 20, 20, menu_width, menu_height)
+        
+        # Panel de información de agentes
+        info_panel_width = 280
+        info_panel_height = height - 100
+        self.info_panel = AgentInfoPanel(20, 60, info_panel_width, info_panel_height)
 
         # Agentes
         self.agents = []
@@ -316,10 +460,10 @@ class GeneticTrainer:
 
         # Si existe spawn point en custom_track_data, colocar el auto ahí
         if self.custom_track_data and 'spawn_point' in self.custom_track_data and self.custom_track_data['spawn_point']:
-            sp = self.custom_track_data['spawn_point']
+            sp = self.custom_track_data['spawn_point'] 
             try:
                 # spawn_point: (x, y, angle)
-                car.x = sp[0]
+                car.x = sp[0] + correccion  # Aplicar corrección si es necesario
                 car.y = sp[1]
                 car.angle = sp[2]
             except Exception:
@@ -380,35 +524,35 @@ class GeneticTrainer:
         cur_pos = (car.x, car.y)
         spawn_point = st.get('spawn_point', (0, 0))
 
-        # 1) Recompensa por PROGRESO REAL (alejarse del spawn)
+        # 1) Recompensa por PROGRESO REAL (alejarse del spawn) - MÁS GENEROSA
         current_distance = np.sqrt((cur_pos[0] - spawn_point[0])**2 + (cur_pos[1] - spawn_point[1])**2)
         if current_distance > st['max_distance']:
-            # Nuevo territorio explorado
-            progress_reward = (current_distance - st['max_distance']) * 0.1
+            # Nuevo territorio explorado - AUMENTADA de 0.1 a 0.3
+            progress_reward = (current_distance - st['max_distance']) * r_progress
             reward += progress_reward
             st['max_distance'] = current_distance
             st['last_progress_step'] = self.agents[agent_idx].steps
             info['progress'] = True
 
-        # 2) Penalización por quedarse quieto (sin progreso)
+        # 2) Penalización por quedarse quieto (sin progreso) - MÁS PERMISIVA
         steps_since_progress = self.agents[agent_idx].steps - st['last_progress_step']
-        if steps_since_progress > 100:  # 100 steps sin progreso
-            reward -= 1.0
+        if steps_since_progress > 200:  # AUMENTADO de 100 a 200 steps
+            reward -= p_quieto  # REDUCIDA de -1.0 a -0.5
             info['stagnant'] = True
         
-        # 2b) Detectar si está atascado (girando en el mismo lugar)
+        # 2b) Detectar si está atascado (girando en el mismo lugar) - MÁS TOLERANTE
         last_pos = st.get('last_position', cur_pos)
         distance_moved = np.sqrt((cur_pos[0] - last_pos[0])**2 + (cur_pos[1] - last_pos[1])**2)
         
-        if distance_moved < 5.0:  # Se movió menos de 5 píxeles
+        if distance_moved < 1.5: 
             st['stuck_counter'] += 1
-            if st['stuck_counter'] > 50:  # 50 steps sin moverse significativamente
-                reward -= 2.0  # Penalización fuerte
+            if st['stuck_counter'] > 60:  # AUMENTADO de 50 a 100 steps
+                reward -= 5.0  # REDUCIDA de -2.0 a -1.0
                 info['stuck'] = True
                 # Si lleva mucho tiempo atascado, marcarlo como muerto
-                if st['stuck_counter'] > 150:  # 150 steps atascado = muerte
+                if st['stuck_counter'] > 150.0:  # AUMENTADO de 150 a 300 steps
                     done = True
-                    reward -= 100.0
+                    reward -= 150.0
                     info['timeout_stuck'] = True
         else:
             st['stuck_counter'] = 0  # Reset si se movió
@@ -425,11 +569,12 @@ class GeneticTrainer:
                     # si el movimiento del auto cruza el segmento del checkpoint
                     if self.segment_intersect(prev_pos, cur_pos, q1, q2):
                         st['passed_checkpoints'][cp_idx] = True
-                        reward += 100.0  # GRAN bono por pasar checkpoint
+                        reward += r_checkpoint  # GRAN bono por pasar checkpoint
                         st['last_progress_step'] = self.agents[agent_idx].steps
                         info.setdefault('checkpoints', []).append(cp_idx)
 
         # 4) Finish line CON DETECCIÓN DE DIRECCIÓN: si existe
+        # pingo
         finish = getattr(self.env, 'finish_line', None)
         required_laps = getattr(self.env, 'required_laps', None) or (self.custom_track_data.get('required_laps') if self.custom_track_data else 0)
         if finish:
@@ -443,7 +588,7 @@ class GeneticTrainer:
                 
                 # Calcular dirección del cruce
                 # Vector de la línea de meta
-                finish_vec = (f2[0] - f1[0], f2[1] - f1[1])
+                finish_vec = (f2[0] - f1[0], f2[1] - f1[1]) # Aplicar corrección si es necesario
                 # Vector de movimiento del auto
                 move_vec = (cur_pos[0] - prev_pos[0], cur_pos[1] - prev_pos[1])
                 # Producto cruz para determinar lado
@@ -463,7 +608,7 @@ class GeneticTrainer:
                     
                     if all_cp_passed:
                         st['laps'] += 1
-                        reward += 200.0  # GRAN bono por cruzar meta correctamente
+                        reward += r_meta  # GRAN bono por cruzar meta correctamente
                         # resetear checkpoints para la siguiente vuelta
                         st['passed_checkpoints'] = [False] * len(st['passed_checkpoints'])
                         st['last_progress_step'] = current_step
@@ -471,15 +616,15 @@ class GeneticTrainer:
                         # Si alcanza laps requeridas -> done
                         if required_laps and st['laps'] >= required_laps:
                             done = True
-                            reward += 1000.0  # ENORME recompensa por completar
+                            reward += r_win  # ENORME recompensa por completar
                             info['completed'] = True
                     else:
                         # Cruzó sin checkpoints
-                        reward -= 50.0  # Penalización por hacer trampa
+                        reward -= p_trampa  # Penalización por hacer trampa
                         info['lap_invalid'] = True
                 else:
                     # Cruzó en dirección INCORRECTA
-                    reward -= 100.0  # GRAN penalización
+                    reward -= p_rongCruce  # GRAN penalización
                     info['wrong_direction'] = True
 
         # 5) Zonas por color: SOLO pequeño bonus/malus
@@ -490,19 +635,19 @@ class GeneticTrainer:
         slow_zones = getattr(self.env, 'slow_zones', None)
         try:
             if speed_zones and speed_zones.get_at((px, py))[:3] == (0, 255, 0):
-                reward += 0.5  # Pequeño bonus
+                reward += r_speedZone  # Pequeño bonus
                 info['zone'] = 'speed'
             elif slow_zones and slow_zones.get_at((px, py))[:3] == (255, 255, 0):
-                reward -= 0.3  # Pequeña penalización
+                reward -= p_slowZone  # Pequeña penalización
                 info['zone'] = 'slow'
             else:
                 # fallback a color directo en track combinado
                 color_at = self.env.track.get_at((px, py))[:3]
                 if color_at == (0, 255, 0):
-                    reward += 0.5
+                    reward += r_speedZone
                     info['zone'] = 'speed'
                 elif color_at == (255, 255, 0):
-                    reward -= 0.3
+                    reward -= p_slowZone
                     info['zone'] = 'slow'
         except Exception:
             pass
@@ -577,10 +722,11 @@ class GeneticTrainer:
                     pass
 
         # Dibujar línea de meta (finish line)
+        #pingo
         if self.env.finish_line:
             try:
                 fx1, fy1, fx2, fy2 = self.env.finish_line[:4]
-                pygame.draw.line(self.screen, RED, (fx1, fy1), (fx2, fy2), 10)
+                pygame.draw.line(self.screen, RED, (fx1 + correccion, fy1), (fx2 + correccion, fy2), 10)
             except Exception:
                 pass
 
@@ -594,10 +740,28 @@ class GeneticTrainer:
                 rotated_rect = rotated_surf.get_rect(center=(int(agent.x), int(agent.y)))
                 self.screen.blit(rotated_surf, rotated_rect.topleft)
 
-                # Etiqueta con fitness
-                font = pygame.font.Font(None, 16)
-                label = font.render(f"#{agent.agent_id}: {agent.fitness:.0f}", True, WHITE)
-                self.screen.blit(label, (int(agent.x) - 20, int(agent.y) - 30))
+                # Etiqueta con fitness - Fondo oscuro para mejor legibilidad
+                font = pygame.font.Font(None, 18)
+                text = f"#{agent.agent_id}: {agent.fitness:.0f}"
+                label = font.render(text, True, YELLOW)
+                
+                # Calcular posición y tamaño del fondo
+                label_x = int(agent.x) - 25
+                label_y = int(agent.y) - 35
+                label_rect = label.get_rect(topleft=(label_x, label_y))
+                
+                # Dibujar fondo semi-transparente oscuro
+                background = pygame.Surface((label_rect.width + 8, label_rect.height + 4))
+                background.set_alpha(180)
+                background.fill((0, 0, 0))
+                self.screen.blit(background, (label_x - 4, label_y - 2))
+                
+                # Dibujar borde para mayor contraste
+                pygame.draw.rect(self.screen, agent.color, 
+                               (label_x - 4, label_y - 2, label_rect.width + 8, label_rect.height + 4), 2)
+                
+                # Dibujar texto
+                self.screen.blit(label, (label_x, label_y))
 
         # Mostrar info de vueltas si hay finish line
         if self.env.finish_line:
@@ -619,6 +783,9 @@ class GeneticTrainer:
         # Dibujar menú
         best_fitness = max([a.fitness for a in self.agents]) if self.agents else 0
         self.menu.draw(self.screen, self.generation, best_fitness)
+        
+        # Dibujar panel de información de agentes
+        self.info_panel.draw(self.screen, self.agents, self.agent_states, self.generation)
 
         # Indicador de pausa
         if self.paused:
@@ -717,11 +884,22 @@ class GeneticTrainer:
                         self.paused = not self.paused
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 1:  # Click izquierdo
-                        param_key, new_value = self.menu.handle_click(event.pos)
-                        if param_key == 'num_agents' and new_value != len(self.agents):
-                            # Reiniciar con nuevo número de agentes
-                            self.create_agents(int(new_value))
-                            self.reset_generation()
+                        # Verificar click en panel de info primero
+                        if self.info_panel.handle_click(event.pos):
+                            pass  # Panel manejó el click
+                        else:
+                            param_key, new_value = self.menu.handle_click(event.pos)
+                            if param_key == 'num_agents' and new_value != len(self.agents):
+                                # Reiniciar con nuevo número de agentes
+                                self.create_agents(int(new_value))
+                                self.reset_generation()
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.running = False
+                    elif event.key == pygame.K_SPACE:
+                        self.paused = not self.paused
+                    elif event.key == pygame.K_i:  # Tecla I para toggle del panel
+                        self.info_panel.toggle()
 
             if not self.paused:
                 # Actualizar agentes
@@ -759,21 +937,21 @@ class GeneticTrainer:
 
                         # Recompensa base
                         if collision:
-                            reward = -200.0  # Mayor penalización por colisión
+                            reward = p_colision  # Mayor penalización por colisión
                             agent.is_alive = False
                         else:
-                            # NO dar recompensa por solo moverse
-                            reward = 0.0
+                            # recompensa por moverse y no chocar - MÁS GENEROSA
+                            reward = r_exist  # Recompensa base por estar vivo
                             
-                            # Pequeña recompensa por velocidad (incentiva moverse)
-                            reward += (car.speed / car.max_speed) * 0.1
+                            # Recompensa por velocidad (incentiva moverse) - AUMENTADA
+                            reward += (car.speed / car.max_speed) * r_velocidad  # AUMENTADA de 0.1 a 0.5
 
-                            # Proximidad a bordes (con sensores) - penalización más fuerte
+                            # Proximidad a bordes (con sensores) - MENOS AGRESIVA
                             min_sensor = min(sensor_distances)
-                            if min_sensor < car.max_sensor_distance * 0.15:
-                                reward -= 1.0  # Penalización fuerte por estar muy cerca
-                            elif min_sensor < car.max_sensor_distance * 0.3:
-                                reward -= 0.3
+                            if min_sensor < car.max_sensor_distance * 0.1:  # REDUCIDO de 0.15 a 0.1
+                                reward -= p_sensorVClose  # REDUCIDA de -1.0 a -0.5
+                            elif min_sensor < car.max_sensor_distance * 0.25:  # REDUCIDO de 0.3 a 0.25
+                                reward -= p_sensorClose  # REDUCIDA de -0.3 a -0.2
 
                             # Check progress (checkpoints, finish line, zones, distancia)
                             prog_reward, done_flag, info = self.check_progress_and_zones(car, state, i)
@@ -784,6 +962,9 @@ class GeneticTrainer:
                                 if info['zone'] == 'speed':
                                     # Zona rápida: aumentar velocidad temporalmente
                                     car.speed = min(car.speed * 1.2, car.max_speed * 1.5)
+                                    # aumentamos el max_speed temporalmente
+                                    car.max_speed = min(car.max_speed * 1.2, 20.0)
+
                                 elif info['zone'] == 'slow':
                                     # Zona lenta: reducir velocidad
                                     car.speed = max(car.speed * 0.8, car.max_speed * 0.3)
@@ -804,9 +985,9 @@ class GeneticTrainer:
                         agent.speed = car.speed
 
                         # TIMEOUT GLOBAL: Si un agente lleva demasiado tiempo sin terminar
-                        if agent.steps > 2000:  # 2000 steps = timeout
+                        if agent.steps > timeOut:  # pasos antes de morir
                             agent.is_alive = False
-                            agent.total_reward -= 50.0  # Penalización por timeout
+                            agent.total_reward -= p_time  # Penalización por timeout
                             state_data['done'] = True
 
                         # Si el agente ya cumplió (is_alive False por done), marcar

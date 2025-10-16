@@ -42,9 +42,12 @@ class Car:
     def reset(self):
         """Reinicia la posición, ángulo y velocidad del auto."""
         if hasattr(self.env, 'custom_track_data') and self.env.custom_track_data:
-            spawn_point = self.env.custom_track_data.get('spawn_point')
+            spawn_point = self.env.custom_track_data.get('spawn_point') 
             if spawn_point and len(spawn_point) >= 3:
-                self.x, self.y, self.angle = spawn_point[:3]
+                # IMPORTANTE: Usar coordenadas exactas sin conversión
+                self.x = float(spawn_point[0])
+                self.y = float(spawn_point[1])
+                self.angle = float(spawn_point[2])
                 self.speed = 0.0
                 self.sensor_distances = [0] * len(self.sensor_angles)
                 return

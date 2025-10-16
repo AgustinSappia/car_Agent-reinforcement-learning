@@ -197,8 +197,8 @@ class TrackSelector:
         print("Lanzando editor de pistas...")
         pygame.quit()
         try:
-            import track_editor
-            editor = track_editor.TrackEditor()
+            import track_editor_v2
+            editor = track_editor_v2.TrackEditorV2()
             editor.run()
         except Exception as e:
             print(f"Error lanzando editor: {e}")

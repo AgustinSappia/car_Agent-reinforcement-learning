@@ -573,14 +573,15 @@ class TrackEditorV2:
         pygame.image.save(self.speed_zone_layer, f"tracks/{track_name}_speed.png")
         pygame.image.save(self.slow_zone_layer, f"tracks/{track_name}_slow.png")
         
-        # Metadata
+        # Metadata - Convertir coordenadas a listas para JSON
+        # IMPORTANTE: Guardar coordenadas exactas sin transformaciones
         metadata = {
             'name': track_name,
             'width': self.canvas_width,
             'height': self.canvas_height,
-            'spawn_point': self.spawn_point,
-            'finish_line': self.finish_line,
-            'checkpoints': self.checkpoints,
+            'spawn_point': list(self.spawn_point) if self.spawn_point else None,
+            'finish_line': list(self.finish_line) if self.finish_line else None,
+            'checkpoints': [list(cp) for cp in self.checkpoints] if self.checkpoints else [],
             'required_laps': self.required_laps,
             'created': timestamp,
             'version': 2  # Versión del editor
@@ -594,8 +595,13 @@ class TrackEditorV2:
         pygame.image.save(thumbnail, f"tracks/{track_name}_thumb.png")
         
         print(f"✓ Pista guardada: {track_name}")
+        print(f"  - Dimensiones: {self.canvas_width}x{self.canvas_height}")
         print(f"  - Vueltas requeridas: {self.required_laps}")
         print(f"  - Checkpoints: {len(self.checkpoints)}")
+        if self.spawn_point:
+            print(f"  - Spawn: ({self.spawn_point[0]:.1f}, {self.spawn_point[1]:.1f})")
+        if self.finish_line:
+            print(f"  - Meta: ({self.finish_line[0]:.1f}, {self.finish_line[1]:.1f}) -> ({self.finish_line[2]:.1f}, {self.finish_line[3]:.1f})")
     
     def load_track_menu(self):
         """Carga una pista (simplificado)"""
@@ -617,26 +623,69 @@ class TrackEditorV2:
     def load_track(self, track_name):
         """Carga una pista específica"""
         try:
-            # Cargar capas
-            self.track_layer = pygame.image.load(f"tracks/{track_name}_track.png")
+            # Cargar capas - IMPORTANTE: Mantener tamaño exacto sin escalar
+            track_path = f"tracks/{track_name}_track.png"
+            if os.path.exists(track_path):
+                loaded_track = pygame.image.load(track_path)
+                # Verificar si el tamaño coincide con el canvas actual
+                if loaded_track.get_size() == (self.canvas_width, self.canvas_height):
+                    self.track_layer = loaded_track
+                else:
+                    print(f"⚠ Advertencia: Tamaño de pista no coincide. Esperado: {self.canvas_width}x{self.canvas_height}, Obtenido: {loaded_track.get_size()}")
+                    # Escalar si es necesario, pero advertir
+                    self.track_layer = pygame.transform.scale(loaded_track, (self.canvas_width, self.canvas_height))
             
             if os.path.exists(f"tracks/{track_name}_finish.png"):
                 self.finish_line_layer = pygame.image.load(f"tracks/{track_name}_finish.png")
+                if self.finish_line_layer.get_size() != (self.canvas_width, self.canvas_height):
+                    self.finish_line_layer = pygame.transform.scale(self.finish_line_layer, (self.canvas_width, self.canvas_height))
+                    
             if os.path.exists(f"tracks/{track_name}_checkpoint.png"):
                 self.checkpoint_layer = pygame.image.load(f"tracks/{track_name}_checkpoint.png")
+                if self.checkpoint_layer.get_size() != (self.canvas_width, self.canvas_height):
+                    self.checkpoint_layer = pygame.transform.scale(self.checkpoint_layer, (self.canvas_width, self.canvas_height))
+                    
             if os.path.exists(f"tracks/{track_name}_speed.png"):
                 self.speed_zone_layer = pygame.image.load(f"tracks/{track_name}_speed.png")
+                if self.speed_zone_layer.get_size() != (self.canvas_width, self.canvas_height):
+                    self.speed_zone_layer = pygame.transform.scale(self.speed_zone_layer, (self.canvas_width, self.canvas_height))
+                    
             if os.path.exists(f"tracks/{track_name}_slow.png"):
                 self.slow_zone_layer = pygame.image.load(f"tracks/{track_name}_slow.png")
+                if self.slow_zone_layer.get_size() != (self.canvas_width, self.canvas_height):
+                    self.slow_zone_layer = pygame.transform.scale(self.slow_zone_layer, (self.canvas_width, self.canvas_height))
             
             # Cargar metadata
             with open(f"tracks/{track_name}.json", 'r') as f:
                 metadata = json.load(f)
             
+            # IMPORTANTE: Cargar coordenadas exactas sin transformaciones
             self.spawn_point = tuple(metadata['spawn_point']) if metadata.get('spawn_point') else None
             self.finish_line = tuple(metadata['finish_line']) if metadata.get('finish_line') else None
             self.checkpoints = [tuple(cp) for cp in metadata.get('checkpoints', [])]
             self.required_laps = metadata.get('required_laps', 3)
+            
+            # CRÍTICO: Redibujar las líneas basándose en las coordenadas del JSON
+            # Esto asegura que las líneas estén exactamente donde deben estar
+            
+            # Limpiar capas de líneas antes de redibujar
+            self.finish_line_layer.fill((0, 0, 0))
+            self.checkpoint_layer.fill((0, 0, 0))
+            
+            # Redibujar línea de meta si existe
+            if self.finish_line and len(self.finish_line) >= 4:
+                x1, y1, x2, y2 = self.finish_line[:4]
+                pygame.draw.line(self.finish_line_layer, FINISH_LINE_COLOR,
+                               (int(x1), int(y1)), (int(x2), int(y2)), 10)
+                print(f"  - Meta redibujada en: ({x1:.1f}, {y1:.1f}) -> ({x2:.1f}, {y2:.1f})")
+            
+            # Redibujar checkpoints si existen
+            for i, cp in enumerate(self.checkpoints):
+                if len(cp) >= 4:
+                    x1, y1, x2, y2 = cp[:4]
+                    pygame.draw.line(self.checkpoint_layer, CHECKPOINT_COLOR,
+                                   (int(x1), int(y1)), (int(x2), int(y2)), 8)
+                    print(f"  - Checkpoint {i+1} redibujado en: ({x1:.1f}, {y1:.1f}) -> ({x2:.1f}, {y2:.1f})")
             
             # Actualizar slider de vueltas
             for slider in self.sliders:
@@ -644,11 +693,18 @@ class TrackEditorV2:
                     slider['value'] = self.required_laps
             
             print(f"✓ Pista cargada: {track_name}")
+            print(f"  - Dimensiones: {metadata.get('width', 'N/A')}x{metadata.get('height', 'N/A')}")
             print(f"  - Vueltas: {self.required_laps}")
             print(f"  - Checkpoints: {len(self.checkpoints)}")
+            if self.spawn_point:
+                print(f"  - Spawn: ({self.spawn_point[0]:.1f}, {self.spawn_point[1]:.1f}, {math.degrees(self.spawn_point[2]):.1f}°)")
+            if self.finish_line:
+                print(f"  - Meta: ({self.finish_line[0]:.1f}, {self.finish_line[1]:.1f}) -> ({self.finish_line[2]:.1f}, {self.finish_line[3]:.1f})")
             
         except Exception as e:
-            print(f"Error cargando pista: {e}")
+            print(f"✗ Error cargando pista: {e}")
+            import traceback
+            traceback.print_exc()
     
     def test_track(self):
         """Prueba la pista con control manual del auto"""
@@ -786,9 +842,69 @@ class TrackEditorV2:
             pygame.draw.line(self.screen, SPAWN_COLOR, (int(x), int(y)),
                            (int(end_x), int(end_y)), 3)
         
+        # Finish line con indicador de dirección
+        if self.finish_line:
+            x1, y1, x2, y2, angle = self.finish_line
+            # Dibujar la línea de meta
+            pygame.draw.line(self.screen, RED, (int(x1), int(y1)), (int(x2), int(y2)), 10)
+            
+            # Calcular punto medio de la línea
+            mid_x = (x1 + x2) / 2
+            mid_y = (y1 + y2) / 2
+            
+            # Calcular vector perpendicular (dirección correcta de cruce)
+            # El ángulo de la línea + 90° da la perpendicular
+            perp_angle = angle + math.pi / 2
+            
+            # Dibujar flecha indicadora (verde brillante)
+            arrow_length = 40
+            arrow_end_x = mid_x + arrow_length * math.cos(perp_angle)
+            arrow_end_y = mid_y + arrow_length * math.sin(perp_angle)
+            
+            # Línea principal de la flecha
+            pygame.draw.line(self.screen, (0, 255, 0), 
+                           (int(mid_x), int(mid_y)), 
+                           (int(arrow_end_x), int(arrow_end_y)), 5)
+            
+            # Punta de la flecha (triángulo)
+            arrow_size = 15
+            left_angle = perp_angle + 2.5
+            right_angle = perp_angle - 2.5
+            
+            left_x = arrow_end_x - arrow_size * math.cos(left_angle)
+            left_y = arrow_end_y - arrow_size * math.sin(left_angle)
+            right_x = arrow_end_x - arrow_size * math.cos(right_angle)
+            right_y = arrow_end_y - arrow_size * math.sin(right_angle)
+            
+            pygame.draw.polygon(self.screen, (0, 255, 0), [
+                (int(arrow_end_x), int(arrow_end_y)),
+                (int(left_x), int(left_y)),
+                (int(right_x), int(right_y))
+            ])
+            
+            # Círculo en el punto medio para mayor visibilidad
+            pygame.draw.circle(self.screen, (0, 255, 0), (int(mid_x), int(mid_y)), 8)
+            pygame.draw.circle(self.screen, (255, 255, 255), (int(mid_x), int(mid_y)), 8, 2)
+        
         # Línea temporal para finish line o checkpoint
         if self.setting_finish_line and self.finish_line_start:
             pygame.draw.line(self.screen, RED, self.finish_line_start, mouse_pos, 10)
+            
+            # Preview de la flecha de dirección
+            temp_mid_x = (self.finish_line_start[0] + mouse_pos[0]) / 2
+            temp_mid_y = (self.finish_line_start[1] + mouse_pos[1]) / 2
+            temp_dx = mouse_pos[0] - self.finish_line_start[0]
+            temp_dy = mouse_pos[1] - self.finish_line_start[1]
+            temp_angle = math.atan2(temp_dy, temp_dx)
+            temp_perp_angle = temp_angle + math.pi / 2
+            
+            temp_arrow_end_x = temp_mid_x + 40 * math.cos(temp_perp_angle)
+            temp_arrow_end_y = temp_mid_y + 40 * math.sin(temp_perp_angle)
+            
+            pygame.draw.line(self.screen, (0, 255, 0, 128), 
+                           (int(temp_mid_x), int(temp_mid_y)), 
+                           (int(temp_arrow_end_x), int(temp_arrow_end_y)), 3)
+            pygame.draw.circle(self.screen, (0, 255, 0), (int(temp_mid_x), int(temp_mid_y)), 6)
         
         if self.setting_checkpoint and self.checkpoint_start:
             pygame.draw.line(self.screen, BLUE, self.checkpoint_start, mouse_pos, 8)
