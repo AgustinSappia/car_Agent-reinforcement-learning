@@ -4,8 +4,7 @@ import torch.nn.functional as F
 
 class LinearQNet(nn.Module):
     """
-    Red neuronal Q simple (LinearQNet) para DQN.
-    Arquitectura:
+    Red neuronal Q simplefgv
     - Entrada: tamaño del espacio de observación (e.g., 7: 5 sensores + speed + angle).
     - Capas ocultas: 128 neuronas (ReLU) -> 64 neuronas (ReLU).
     - Salida: número de acciones posibles (e.g., 4 acciones discretas).

@@ -18,6 +18,9 @@ import csv
 from copy import deepcopy
 from model import LinearQNet
 from environment import Environment
+from car import Car
+from track_selector import select_track
+from track_loader import load_track_data
 
 # Colores para el menú
 WHITE = (255, 255, 255)
@@ -53,7 +56,7 @@ r_progress = 0.3  # Recompensa por alejarse del spawn (antes 0.1) multiplicado p
 p_quieto = 0.5  # Penalización por estar quieto, mas grande es mas penalidad (antes 1.0)
 p_trampa = 50.0  # Penalización por cruzar meta sin checkpoints (antes 50.0)
 p_rongCruce = 800  # Penalización por cruzar meta en dirección incorrecta (antes 100.0)
-p_slowZone = 0.3  # Penalización por estar en zona lenta (antes 0.3)
+p_slowZone = 1  # Penalización por estar en zona lenta (antes 0.3)
 p_colision = -200.0  # Penalización por colisión (antes -200.0)
 p_sensorClose = 0.2  # Penalización por sensor muy cerca (antes 0.3)
 p_sensorVClose = 0.5  # Penalización por sensor muy muy cerca (antes 0.5)
@@ -90,9 +93,10 @@ class GeneticAgent:
 
     def act(self, state, epsilon=0.0):
         """Selecciona acción (con exploración opcional)"""
+        # CORRECCIÓN: Cuando epsilon es 1.0, forzar acción aleatoria.
         if random.random() < epsilon:
-            return random.randrange(self.action_size)
-
+            # Usamos randint(0, 3) para asegurar que se incluyan todos los índices.
+            return random.randint(0, self.action_size - 1)
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_values = self.brain(state_tensor)
@@ -386,10 +390,10 @@ class GeneticTrainer:
 
         # Mapping de acciones
         self.action_map = [
-            [1, 0],  # 0: nada
-            [1, 1],  # 1: acelerar
-            [0, 1],  # 2: izquierda + acel
-            [2, 1]   # 3: derecha + acel
+            [0, 0],   # 0: nada (steering=0, throttle=0)
+            [0, 1],   # 1: acelerar (steering=0, throttle=1)
+            [-1, 1],  # 2: izquierda + acel (steering=-1, throttle=1)
+            [1, 1]    # 3: derecha + acel (steering=1, throttle=1)
         ]
 
         # Estados de los agentes
@@ -449,7 +453,7 @@ class GeneticTrainer:
 
     def create_car_for_agent(self):
         """Crea un auto independiente para un agente"""
-        from car import Car
+
         car = Car(self.env)
         car.reset()
         # Dar velocidad inicial moderada para moverse
@@ -1014,8 +1018,7 @@ if __name__ == "__main__":
     print("INICIANDO SELECTOR DE PISTAS")
     print("="*60 + "\n")
 
-    from track_selector import select_track
-    from track_loader import load_track_data
+
 
     selected_track = select_track()
 
