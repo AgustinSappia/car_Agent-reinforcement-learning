@@ -1,6 +1,6 @@
-
+![image alt](https://github.com/AgustinSappia/car_Agent-reinforcement-learning/blob/ddf8001a2a12138849aa2fee5502b2204fd58ee8/Simulacion.png),
 ![image alt](https://github.com/AgustinSappia/car_Agent-reinforcement-learning/blob/ddf8001a2a12138849aa2fee5502b2204fd58ee8/Editor%20de%20pistas.png),
-
+![image alt](https://github.com/AgustinSappia/car_Agent-reinforcement-learning/blob/ddf8001a2a12138849aa2fee5502b2204fd58ee8/Selector%20de%20pistas.png),
 # car_ai_project/
 
  Este es el código completo para la base del proyecto "Self Driving Car AI".
