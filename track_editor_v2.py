@@ -40,7 +40,7 @@ BLUE = (0, 100, 255)
 class TrackEditorV2:
     """Editor avanzado de pistas con múltiples capas"""
     
-    def __init__(self, width=1920, height=1080):
+    def __init__(self, width=1920, height=1080, track_name=None):
         pygame.init()
         self.width = width
         self.height = height
@@ -135,6 +135,14 @@ class TrackEditorV2:
         print("  - Speed Zones (Verde) - Zonas de aceleración")
         print("  - Slow Zones (Amarillo) - Zonas de desaceleración")
         print("="*70 + "\n")
+        
+        # Si se pasa una pista, se abre en modo edición: al guardar se
+        # sobrescribe esa misma pista en vez de crear una nueva.
+        self.editing_name = None
+        if track_name:
+            self.load_track(track_name)
+            self.editing_name = track_name
+            pygame.display.set_caption(f"Track Editor V2 - Editando {track_name}")
     
     def create_ui(self):
         """Crea la interfaz de usuario"""
@@ -550,6 +558,21 @@ class TrackEditorV2:
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         track_name = f"track_{timestamp}"
+        created = timestamp
+        display_name = None
+        
+        # Modo edición: conservar nombre, fecha de creación y nombre visible
+        if self.editing_name:
+            track_name = self.editing_name
+            meta_path = f"tracks/{track_name}.json"
+            if os.path.exists(meta_path):
+                try:
+                    with open(meta_path, 'r') as f:
+                        old_meta = json.load(f)
+                    created = old_meta.get('created', timestamp)
+                    display_name = old_meta.get('display_name')
+                except Exception as e:
+                    print(f"⚠ No se pudo leer metadata previa: {e}")
         
         # Combinar todas las capas para la imagen principal
         combined = self.track_layer.copy()
@@ -584,9 +607,12 @@ class TrackEditorV2:
             'finish_line': list(self.finish_line) if self.finish_line else None,
             'checkpoints': [list(cp) for cp in self.checkpoints] if self.checkpoints else [],
             'required_laps': self.required_laps,
-            'created': timestamp,
+            'created': created,
+            'modified': timestamp,
             'version': 2  # Versión del editor
         }
+        if display_name:
+            metadata['display_name'] = display_name
         
         with open(f"tracks/{track_name}.json", 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -655,6 +681,12 @@ class TrackEditorV2:
                 self.slow_zone_layer = pygame.image.load(f"tracks/{track_name}_slow.png")
                 if self.slow_zone_layer.get_size() != (self.canvas_width, self.canvas_height):
                     self.slow_zone_layer = pygame.transform.scale(self.slow_zone_layer, (self.canvas_width, self.canvas_height))
+            
+            # Las capas cargadas desde PNG pierden el colorkey: sin esto el
+            # negro de fondo tapa la pista al dibujarlas en pantalla
+            for layer in (self.finish_line_layer, self.checkpoint_layer,
+                          self.speed_zone_layer, self.slow_zone_layer):
+                layer.set_colorkey((0, 0, 0))
             
             # Cargar metadata
             with open(f"tracks/{track_name}.json", 'r') as f:
