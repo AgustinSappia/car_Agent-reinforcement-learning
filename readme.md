@@ -48,3 +48,16 @@ Cruzar sin checkpoints: -50 puntos
 Dirección incorrecta: -100 puntos
 Colisión: -200 puntos
 Zonas: ±0.3-0.5 (pequeño bonus/malus)
+
+## Entrenamiento genético (nuevo)
+
+`python train.py` (o `python train_genetic2.py`, que es un atajo):
+
+1. Menú principal: **Recorrer una pista** (abre el selector de pistas) o **Resolver un laberinto**.
+2. **Taller del agente**: qué ve (sensores, ángulo, alcance, velocidad, brújula), cómo piensa (tamaño de la red),
+   cómo maneja (acciones, velocidad, giro) y cómo evoluciona (población, élite, mutación, cruza).
+   Se guarda como perfil en `agentes/`.
+3. Entrenamiento: velocidades x1 a x40 y Turbo, gráfico de fitness y la red del líder en vivo.
+
+El código está en `ai/`: `config.py` (perfil), `brain.py` (redes de toda la población en numpy),
+`world.py` (física y sensores vectorizados), `scenarios.py` (pista y laberinto), `trainer.py`, `menus.py`.
