@@ -10,6 +10,7 @@ Diferencias con V2:
 - Trazos continuos aunque el mouse se mueva rápido
 - Ayuda y lista de verificación en pantalla
 - Guarda en el mismo formato que V2 (track_loader / train_genetic2 no cambian)
+- Herramienta Curva, checkpoints automáticos, plantillas, zoom, simetría y modo Probar
 """
 
 import pygame
@@ -18,6 +19,8 @@ import json
 import os
 import zlib
 from datetime import datetime
+
+import track_geometry as geo
 
 # Tamaño lógico de la pista (lo que usa el entrenamiento)
 TRACK_W, TRACK_H = 1570, 1080
@@ -44,12 +47,13 @@ ORANGE = (255, 150, 40)
 CYAN = (70, 210, 230)
 BLUE = (60, 130, 255)
 
-TOOLBAR_W = 230
+TOOLBAR_W = 250
 STATUS_H = 34
 
 # (id, nombre, tecla, color de muestra)
 TOOLS = [
     ('road', "Camino", '1', ROAD_COLOR),
+    ('curve', "Curva", '8', (170, 170, 255)),
     ('erase', "Goma", '2', (90, 90, 90)),
     ('speed', "Zona rápida", '3', SPEED_ZONE_COLOR),
     ('slow', "Zona lenta", '4', SLOW_ZONE_COLOR),
@@ -59,10 +63,11 @@ TOOLS = [
     ('select', "Seleccionar", 'V', ORANGE),
 ]
 TOOL_KEYS = {pygame.K_1: 'road', pygame.K_2: 'erase', pygame.K_3: 'speed', pygame.K_4: 'slow',
-             pygame.K_5: 'spawn', pygame.K_6: 'finish', pygame.K_7: 'checkpoint', pygame.K_v: 'select'}
+             pygame.K_5: 'spawn', pygame.K_6: 'finish', pygame.K_7: 'checkpoint', pygame.K_8: 'curve', pygame.K_v: 'select'}
 
 TOOL_HELP = {
     'road': "Clic y arrastrá para dibujar el camino. Clic derecho borra. Rueda / [ ]: tamaño del pincel.",
+    'curve': "Clic para agregar puntos. Clic en el primer punto cierra la vuelta. Enter o clic derecho: terminar. Retroceso: borrar punto.",
     'erase': "Clic y arrastrá para borrar camino (vuelve a ser pared). Rueda / [ ]: tamaño.",
     'speed': "Pintá zonas donde el auto acelera. Clic derecho borra la zona.",
     'slow': "Pintá zonas donde el auto frena. Clic derecho borra la zona.",
@@ -71,6 +76,9 @@ TOOL_HELP = {
     'checkpoint': "Clic y arrastrá de borde a borde para agregar un checkpoint. Los autos deben pasar todos.",
     'select': "Clic en un objeto para seleccionarlo, arrastrá para moverlo o sus puntas. Supr: borrar. I: invertir meta.",
 }
+
+TEMPLATES = [('oval', "Oval"), ('ocho', "Ocho"), ('curvas', "Curvas en S"), ('chicana', "Chicana")]
+SYMMETRY_LABELS = ["Simetría: no", "Simetría: izq-der", "Simetría: arr-abj", "Simetría: 4 lados"]
 
 MAX_HISTORY = 40
 PICK_RADIUS = 14  # en píxeles de pantalla
@@ -121,8 +129,10 @@ class TrackEditorV3:
         # Viewport del lienzo
         avail_w = self.width - TOOLBAR_W - 20
         avail_h = self.height - STATUS_H - 20
-        self.scale = min(avail_w / TRACK_W, avail_h / TRACK_H)
-        view_w, view_h = int(TRACK_W * self.scale), int(TRACK_H * self.scale)
+        self.base_scale = min(avail_w / TRACK_W, avail_h / TRACK_H)
+        self.zoom = 1.0
+        self.offset = [0.0, 0.0]  # Esquina superior izquierda visible (coordenadas de pista)
+        view_w, view_h = int(TRACK_W * self.base_scale), int(TRACK_H * self.base_scale)
         self.view = pygame.Rect(TOOLBAR_W + 10 + (avail_w - view_w) // 2,
                                 10 + (avail_h - view_h) // 2, view_w, view_h)
 
@@ -155,6 +165,12 @@ class TrackEditorV3:
         self.name_text = ''
         self.toast = None
         self.running = True
+        self.curve_points = []
+        self.symmetry = 0          # 0 no, 1 horizontal, 2 vertical, 3 ambas
+        self.test = None           # TestDrive activo
+        self.pan = None            # (mouse_inicio, offset_inicio)
+        self.composed = None
+        self.compose_dirty = True
 
         self.track_name = None     # Nombre de archivo (track_YYYYmmdd_HHMMSS)
         self.display_name = None
@@ -177,11 +193,37 @@ class TrackEditorV3:
         name = self.display_name or self.track_name or "Pista nueva"
         pygame.display.set_caption(f"Editor de Pistas - {name}{' *' if self.dirty else ''}")
 
+    @property
+    def scale(self):
+        return self.base_scale * self.zoom
+
     def to_canvas(self, pos):
-        return ((pos[0] - self.view.x) / self.scale, (pos[1] - self.view.y) / self.scale)
+        return ((pos[0] - self.view.x) / self.scale + self.offset[0],
+                (pos[1] - self.view.y) / self.scale + self.offset[1])
 
     def to_screen(self, pt):
-        return (self.view.x + pt[0] * self.scale, self.view.y + pt[1] * self.scale)
+        return (self.view.x + (pt[0] - self.offset[0]) * self.scale,
+                self.view.y + (pt[1] - self.offset[1]) * self.scale)
+
+    def clamp_offset(self):
+        vis_w, vis_h = self.view.w / self.scale, self.view.h / self.scale
+        self.offset[0] = max(0.0, min(TRACK_W - vis_w, self.offset[0]))
+        self.offset[1] = max(0.0, min(TRACK_H - vis_h, self.offset[1]))
+
+    def zoom_at(self, pos, factor):
+        """Zoom manteniendo fijo el punto bajo el mouse"""
+        before = self.to_canvas(pos)
+        self.zoom = max(1.0, min(5.0, self.zoom * factor))
+        after = self.to_canvas(pos)
+        self.offset[0] += before[0] - after[0]
+        self.offset[1] += before[1] - after[1]
+        self.clamp_offset()
+        self.view_dirty = True
+
+    def reset_zoom(self):
+        self.zoom = 1.0
+        self.offset = [0.0, 0.0]
+        self.view_dirty = True
 
     def clamp(self, pt):
         return (max(0, min(TRACK_W - 1, pt[0])), max(0, min(TRACK_H - 1, pt[1])))
@@ -192,6 +234,7 @@ class TrackEditorV3:
     def mark_changed(self):
         self.dirty = True
         self.view_dirty = True
+        self.compose_dirty = True
         self.check_dirty = True
         self.update_caption()
 
@@ -255,7 +298,23 @@ class TrackEditorV3:
             return 'slow', BLACK if erase else SLOW_ZONE_COLOR
         return None, None
 
+    def mirrors(self, pt):
+        """El punto y sus reflejos según la simetría activa"""
+        x, y = pt
+        pts = [(x, y)]
+        if self.symmetry in (1, 3):
+            pts.append((TRACK_W - x, y))
+        if self.symmetry in (2, 3):
+            pts.append((x, TRACK_H - y))
+        if self.symmetry == 3:
+            pts.append((TRACK_W - x, TRACK_H - y))
+        return pts
+
     def stroke(self, layer, color, a, b):
+        for ma, mb in zip(self.mirrors(a), self.mirrors(b)):
+            self._stroke(layer, color, ma, mb)
+
+    def _stroke(self, layer, color, a, b):
         """Trazo continuo de a hasta b (círculos en los extremos + línea gruesa)"""
         surf = self._layer(layer)
         r = self.brush
@@ -270,6 +329,7 @@ class TrackEditorV3:
                 pygame.draw.circle(surf, color, (int(a[0] + (b[0] - a[0]) * t), int(a[1] + (b[1] - a[1]) * t)), r)
         self.view_dirty = True
         self.check_dirty = True
+        self.compose_dirty = True
 
     # ------------------------------------------------------------------ #
     # Objetos: selección
@@ -350,7 +410,22 @@ class TrackEditorV3:
     def on_mouse_down(self, pos, button):
         if not self.view.collidepoint(pos):
             return
+        keys = pygame.key.get_pressed()
+        if button == 2 or (button == 1 and keys[pygame.K_SPACE]):
+            self.pan = (pos, list(self.offset))
+            return
         c = self.clamp(self.to_canvas(pos))
+        if self.tool == 'curve':
+            if button == 3:
+                self.finish_curve(closed=False)
+            elif button == 1:
+                if len(self.curve_points) >= 3:
+                    first = self.to_screen(self.curve_points[0])
+                    if math.hypot(pos[0] - first[0], pos[1] - first[1]) < PICK_RADIUS:
+                        self.finish_curve(closed=True)
+                        return
+                self.curve_points.append(c)
+            return
         layer, color = self.paint_target(erase=(button == 3))
 
         if layer and button in (1, 3):
@@ -377,6 +452,12 @@ class TrackEditorV3:
                 self.drag = ('move', key, part, c, self.get_object(key))
 
     def on_mouse_move(self, pos):
+        if self.pan:
+            (sx, sy), (ox, oy) = self.pan
+            self.offset = [ox - (pos[0] - sx) / self.scale, oy - (pos[1] - sy) / self.scale]
+            self.clamp_offset()
+            self.view_dirty = True
+            return
         if not self.drag:
             return
         c = self.clamp(self.to_canvas(pos))
@@ -405,6 +486,9 @@ class TrackEditorV3:
                 self.set_object(key, (orig[0] + dx, orig[1] + dy, orig[2] + dx, orig[3] + dy))
 
     def on_mouse_up(self, pos):
+        if self.pan:
+            self.pan = None
+            return
         if not self.drag:
             return
         if self.drag[0] == 'line':
@@ -426,35 +510,98 @@ class TrackEditorV3:
                 self.undo_stack.pop()
         self.drag = None
 
+
+    # ------------------------------------------------------------------ #
+    # Curva, checkpoints automáticos, plantillas, prueba
+    # ------------------------------------------------------------------ #
+    def finish_curve(self, closed):
+        pts = self.curve_points
+        self.curve_points = []
+        if len(pts) < 2:
+            return
+        self.push_undo('road')
+        line = geo.catmull_rom(pts, closed=closed)
+        for a, b in zip(line, line[1:]):
+            self.stroke('road', ROAD_COLOR, a, b)
+        self.mark_changed()
+        self.show_toast("Curva cerrada" if closed else "Curva agregada")
+
+    def auto_checkpoints(self):
+        if not self.spawn or not self.road.get_at((int(self.spawn[0]), int(self.spawn[1])))[:3] != WALL_COLOR:
+            self.show_toast("Primero poné la salida sobre el camino", ORANGE)
+            return
+        cps, finish, closed = geo.auto_checkpoints(self.road, self.spawn)
+        if not cps:
+            self.show_toast("No pude recorrer la pista desde la salida", RED)
+            return
+        self.push_undo()
+        self.checkpoints = cps
+        if not self.finish:
+            self.finish = finish
+        self.selected = None
+        self.mark_changed()
+        if closed:
+            self.show_toast(f"{len(cps)} checkpoints ubicados")
+        else:
+            self.show_toast(f"{len(cps)} checkpoints, pero la vuelta no cierra: revisalos", ORANGE)
+
+    def apply_template(self, name):
+        self.clear_all(toast=False)
+        pts, width = geo.template_points(name, TRACK_W, TRACK_H)
+        brush, symmetry = self.brush, self.symmetry
+        self.brush, self.symmetry = width // 2, 0
+        line = geo.catmull_rom(pts, closed=True)
+        for a, b in zip(line, line[1:]):
+            self._stroke('road', ROAD_COLOR, a, b)
+        self.brush, self.symmetry = brush, symmetry
+        self.spawn = geo.template_spawn(pts)
+        cps, finish, _ = geo.auto_checkpoints(self.road, self.spawn)
+        self.checkpoints, self.finish = cps, finish
+        self.mark_changed()
+        self.show_toast(f"Plantilla {dict(TEMPLATES)[name]} creada (Ctrl+Z para volver)")
+
+    def start_test(self):
+        if not self.spawn or self.road.get_at((int(self.spawn[0]), int(self.spawn[1])))[:3] == WALL_COLOR:
+            self.show_toast("Para probar, poné la salida sobre el camino", ORANGE)
+            return
+        from track_test_drive import TestDrive
+        self.curve_points = []
+        self.drag = None
+        self.test = TestDrive(self.road, self.speed, self.slow, self.spawn, self.finish,
+                              self.checkpoints, self.required_laps)
+
     # ------------------------------------------------------------------ #
     # Toolbar
     # ------------------------------------------------------------------ #
     def toolbar_items(self):
         """Botones de la barra lateral: (id, texto, rect, activo)"""
         items = []
-        y = 56
-        for tool_id, label, key, _ in TOOLS:
-            items.append(('tool:' + tool_id, f"{label}", pygame.Rect(12, y, TOOLBAR_W - 24, 30), self.tool == tool_id))
-            y += 34
-        y += 4
+        col_w = (TOOLBAR_W - 30) // 2
+        y = 54
+        for k, (tool_id, label, key, _) in enumerate(TOOLS):
+            x = 12 + (k % 2) * (col_w + 6)
+            items.append(('tool:' + tool_id, label, pygame.Rect(x, y + (k // 2) * 34, col_w, 30),
+                          self.tool == tool_id))
+        y += ((len(TOOLS) + 1) // 2) * 34 + 2
         self.brush_y = y
-        items.append(('brush-', "-", pygame.Rect(12, y + 18, 36, 28), False))
-        items.append(('brush+', "+", pygame.Rect(TOOLBAR_W - 48, y + 18, 36, 28), False))
-        y += 52
+        items.append(('brush-', "-", pygame.Rect(12, y + 16, 36, 26), False))
+        items.append(('brush+', "+", pygame.Rect(TOOLBAR_W - 48, y + 16, 36, 26), False))
+        y += 46
         self.laps_y = y
-        items.append(('laps-', "-", pygame.Rect(12, y + 18, 36, 28), False))
-        items.append(('laps+', "+", pygame.Rect(TOOLBAR_W - 48, y + 18, 36, 28), False))
-        y += 54
-        half = (TOOLBAR_W - 30) // 2
-        items.append(('undo', "Deshacer", pygame.Rect(12, y, half, 30), False))
-        items.append(('redo', "Rehacer", pygame.Rect(18 + half, y, half, 30), False))
-        y += 36
-        items.append(('oval', "Plantilla oval", pygame.Rect(12, y, half, 30), False))
-        items.append(('clear', "Borrar todo", pygame.Rect(18 + half, y, half, 30), False))
-        y += 36
-        items.append(('save', "Guardar (Ctrl+S)", pygame.Rect(12, y, TOOLBAR_W - 24, 34), False))
-        y += 40
-        items.append(('exit', "Salir (Esc)", pygame.Rect(12, y, TOOLBAR_W - 24, 30), False))
+        items.append(('laps-', "-", pygame.Rect(12, y + 16, 36, 26), False))
+        items.append(('laps+', "+", pygame.Rect(TOOLBAR_W - 48, y + 16, 36, 26), False))
+        y += 50
+        grid = [('undo', "Deshacer"), ('redo', "Rehacer"),
+                ('templates', "Plantillas (T)"), ('autocp', "Checkp. auto (A)"),
+                ('symmetry', SYMMETRY_LABELS[self.symmetry]), ('clear', "Borrar todo")]
+        for k, (bid, label) in enumerate(grid):
+            x = 12 + (k % 2) * (col_w + 6)
+            items.append((bid, label, pygame.Rect(x, y + (k // 2) * 34, col_w, 30), bid == 'symmetry' and self.symmetry > 0))
+        y += 3 * 34 + 4
+        items.append(('test', "Probar (P)", pygame.Rect(12, y, TOOLBAR_W - 24, 32), False))
+        y += 38
+        items.append(('save', "Guardar", pygame.Rect(12, y, col_w, 32), False))
+        items.append(('exit', "Salir (Esc)", pygame.Rect(18 + col_w, y, col_w, 32), False))
         return items
 
     def on_toolbar_click(self, pos):
@@ -466,6 +613,8 @@ class TrackEditorV3:
 
     def do_action(self, bid):
         if bid.startswith('tool:'):
+            if self.tool == 'curve' and bid != 'tool:curve':
+                self.curve_points = []
             self.tool = bid[5:]
             self.drag = None
         elif bid == 'brush-':
@@ -482,8 +631,14 @@ class TrackEditorV3:
             self.undo()
         elif bid == 'redo':
             self.redo()
-        elif bid == 'oval':
-            self.create_oval_track()
+        elif bid == 'templates':
+            self.modal = 'templates'
+        elif bid == 'autocp':
+            self.auto_checkpoints()
+        elif bid == 'symmetry':
+            self.symmetry = (self.symmetry + 1) % 4
+        elif bid == 'test':
+            self.start_test()
         elif bid == 'clear':
             self.clear_all()
         elif bid == 'save':
@@ -491,7 +646,7 @@ class TrackEditorV3:
         elif bid == 'exit':
             self.request_exit()
 
-    def clear_all(self):
+    def clear_all(self, toast=True):
         self.push_undo(('road', 'speed', 'slow'))
         self.road.fill(WALL_COLOR)
         self.speed.fill(BLACK)
@@ -499,26 +654,8 @@ class TrackEditorV3:
         self.spawn, self.finish, self.checkpoints = None, None, []
         self.selected = None
         self.mark_changed()
-        self.show_toast("Pista borrada (Ctrl+Z para deshacer)", ORANGE)
-
-    def create_oval_track(self):
-        self.clear_all()
-        W, H = TRACK_W, TRACK_H
-        pygame.draw.ellipse(self.road, ROAD_COLOR, (int(W * 0.08), int(H * 0.1), int(W * 0.84), int(H * 0.8)))
-        pygame.draw.ellipse(self.road, WALL_COLOR, (int(W * 0.25), int(H * 0.32), int(W * 0.5), int(H * 0.36)))
-        cx = W // 2
-        # Meta abajo, autos van hacia la derecha (sentido antihorario en pantalla)
-        bottom_in, bottom_out = int(H * 0.68), int(H * 0.9)
-        self.finish = (cx, bottom_out, cx, bottom_in)
-        self.spawn = (cx - 80, (bottom_in + bottom_out) // 2, 0.0)
-        top_in, top_out = int(H * 0.32), int(H * 0.1)
-        self.checkpoints = [
-            (int(W * 0.75), H // 2, int(W * 0.92), H // 2),
-            (cx, top_out, cx, top_in),
-            (int(W * 0.08), H // 2, int(W * 0.25), H // 2),
-        ]
-        self.mark_changed()
-        self.show_toast("Plantilla oval creada")
+        if toast:
+            self.show_toast("Pista borrada (Ctrl+Z para deshacer)", ORANGE)
 
     # ------------------------------------------------------------------ #
     # Verificación
@@ -669,6 +806,30 @@ class TrackEditorV3:
             elif event.unicode and event.unicode.isprintable() and len(self.name_text) < 30:
                 self.name_text += event.unicode
             return
+        if self.modal == 'templates':
+            choice = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2, pygame.K_4: 3}.get(key)
+            if choice is not None:
+                self.modal = None
+                self.apply_template(TEMPLATES[choice][0])
+            elif key == pygame.K_ESCAPE:
+                self.modal = None
+            return
+        if self.test:
+            if key == pygame.K_ESCAPE:
+                self.test = None
+            elif key == pygame.K_r:
+                self.test.restart()
+            return
+        if self.tool == 'curve' and self.curve_points:
+            if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self.finish_curve(closed=False)
+                return
+            if key == pygame.K_BACKSPACE:
+                self.curve_points.pop()
+                return
+            if key == pygame.K_ESCAPE:
+                self.curve_points = []
+                return
         if self.modal == 'unsaved':
             if key in (pygame.K_g, pygame.K_RETURN):
                 self.modal = None
@@ -701,9 +862,20 @@ class TrackEditorV3:
             self.delete_selected()
         elif key == pygame.K_i:
             self.invert_finish()
+        elif key == pygame.K_p:
+            self.start_test()
+        elif key == pygame.K_a:
+            self.auto_checkpoints()
+        elif key == pygame.K_t:
+            self.modal = 'templates'
+        elif key == pygame.K_m:
+            self.do_action('symmetry')
+        elif key in (pygame.K_0, pygame.K_KP0):
+            self.reset_zoom()
         elif key == pygame.K_g:
             self.show_grid = not self.show_grid
             self.view_dirty = True
+            self.compose_dirty = True
         elif key in (pygame.K_LEFTBRACKET, pygame.K_MINUS, pygame.K_KP_MINUS):
             self.do_action('brush-')
         elif key in (pygame.K_RIGHTBRACKET, pygame.K_PLUS, pygame.K_KP_PLUS, pygame.K_EQUALS):
@@ -734,20 +906,54 @@ class TrackEditorV3:
 
     def draw_canvas(self):
         if self.view_dirty or self.view_cache is None:
-            composed = self.road.copy()
-            composed.blit(self.speed, (0, 0))
-            composed.blit(self.slow, (0, 0))
-            self.view_cache = pygame.transform.scale(composed, self.view.size)
-            if self.show_grid:
-                for gx in range(0, TRACK_W, 50):
-                    x = int(gx * self.scale)
-                    pygame.draw.line(self.view_cache, (45, 45, 55), (x, 0), (x, self.view.h))
-                for gy in range(0, TRACK_H, 50):
-                    y = int(gy * self.scale)
-                    pygame.draw.line(self.view_cache, (45, 45, 55), (0, y), (self.view.w, y))
+            if self.composed is None or self.compose_dirty:
+                composed = self.road.copy()
+                composed.blit(self.speed, (0, 0))
+                composed.blit(self.slow, (0, 0))
+                if self.show_grid:
+                    for gx in range(0, TRACK_W, 50):
+                        pygame.draw.line(composed, (50, 50, 62), (gx, 0), (gx, TRACK_H), 2)
+                    for gy in range(0, TRACK_H, 50):
+                        pygame.draw.line(composed, (50, 50, 62), (0, gy), (TRACK_W, gy), 2)
+                self.composed = composed
+                self.compose_dirty = False
+            vis = pygame.Rect(int(self.offset[0]), int(self.offset[1]),
+                              int(math.ceil(self.view.w / self.scale)), int(math.ceil(self.view.h / self.scale)))
+            vis = vis.clip(self.composed.get_rect())
+            self.view_cache = pygame.transform.scale(self.composed.subsurface(vis), self.view.size)
             self.view_dirty = False
         self.screen.blit(self.view_cache, self.view)
         pygame.draw.rect(self.screen, PANEL_LIGHT, self.view.inflate(4, 4), 2)
+        if self.zoom > 1:
+            self.text(f"Zoom x{self.zoom:.1f}  (0: volver)", self.tiny_font, YELLOW,
+                      bottomleft=(self.view.x + 8, self.view.bottom - 6))
+
+    def draw_symmetry_axes(self):
+        if not self.symmetry:
+            return
+        if self.symmetry in (1, 3):
+            x = self.to_screen((TRACK_W / 2, 0))[0]
+            for y in range(self.view.top, self.view.bottom, 16):
+                pygame.draw.line(self.screen, ORANGE, (x, y), (x, y + 8), 2)
+        if self.symmetry in (2, 3):
+            y = self.to_screen((0, TRACK_H / 2))[1]
+            for x in range(self.view.left, self.view.right, 16):
+                pygame.draw.line(self.screen, ORANGE, (x, y), (x + 8, y), 2)
+
+    def draw_curve_preview(self):
+        if self.tool != 'curve' or not self.curve_points:
+            return
+        pts = list(self.curve_points)
+        mouse = pygame.mouse.get_pos()
+        if self.view.collidepoint(mouse):
+            pts.append(self.to_canvas(mouse))
+        line = [self.to_screen(p) for p in geo.catmull_rom(pts)]
+        if len(line) > 1:
+            pygame.draw.lines(self.screen, (120, 120, 160), False, line, max(2, int(self.brush * 2 * self.scale)))
+            pygame.draw.lines(self.screen, WHITE, False, line, 2)
+        for k, p in enumerate(self.curve_points):
+            sp = self.to_screen(p)
+            pygame.draw.circle(self.screen, GREEN if k == 0 else YELLOW, (int(sp[0]), int(sp[1])), 7 if k == 0 else 5)
 
     def draw_arrow(self, start, direction, length, color, width=3):
         end = (start[0] + direction[0] * length, start[1] + direction[1] * length)
@@ -819,21 +1025,21 @@ class TrackEditorV3:
         pygame.draw.rect(self.screen, PANEL, (0, 0, TOOLBAR_W, self.height))
         self.text("EDITOR DE PISTAS", self.title_font, YELLOW, topleft=(12, 18))
         swatches = {t[0]: t[3] for t in TOOLS}
-        keys = {t[0]: t[2] for t in TOOLS}
         for bid, label, rect, active in self.toolbar_items():
             if bid.startswith('tool:'):
                 tid = bid[5:]
                 self.draw_button(label, rect, active, swatch=swatches[tid])
-                self.text(keys[tid], self.tiny_font, TEXT_DIM, midright=(rect.right - 10, rect.centery))
+            elif bid == 'test':
+                self.draw_button(label, rect, color=(120, 60, 200))
             elif bid == 'save':
                 self.draw_button(label, rect, color=(40, 140, 80) if self.dirty else PANEL_LIGHT)
             else:
                 self.draw_button(label, rect)
 
-        self.text(f"Pincel: {self.brush}", self.small_font, WHITE, center=(TOOLBAR_W // 2, self.brush_y + 32))
-        self.text("Tamaño", self.tiny_font, TEXT_DIM, center=(TOOLBAR_W // 2, self.brush_y + 8))
-        self.text(f"Vueltas: {self.required_laps}", self.small_font, WHITE, center=(TOOLBAR_W // 2, self.laps_y + 32))
-        self.text("Para ganar", self.tiny_font, TEXT_DIM, center=(TOOLBAR_W // 2, self.laps_y + 8))
+        self.text(f"Pincel: {self.brush}", self.small_font, WHITE, center=(TOOLBAR_W // 2, self.brush_y + 29))
+        self.text("Tamaño", self.tiny_font, TEXT_DIM, center=(TOOLBAR_W // 2, self.brush_y + 7))
+        self.text(f"Vueltas: {self.required_laps}", self.small_font, WHITE, center=(TOOLBAR_W // 2, self.laps_y + 29))
+        self.text("Para ganar", self.tiny_font, TEXT_DIM, center=(TOOLBAR_W // 2, self.laps_y + 7))
 
     def draw_checklist(self):
         """Recuadro en la esquina del lienzo con lo que falta para entrenar"""
@@ -854,19 +1060,54 @@ class TrackEditorV3:
     def draw_status(self):
         rect = pygame.Rect(TOOLBAR_W, self.height - STATUS_H, self.width - TOOLBAR_W, STATUS_H)
         pygame.draw.rect(self.screen, PANEL, rect)
-        tool_name = {t[0]: t[1] for t in TOOLS}[self.tool]
-        self.text(f"{tool_name}:", self.small_font, YELLOW, midleft=(rect.x + 12, rect.centery))
-        self.text(TOOL_HELP[self.tool], self.tiny_font, WHITE, midleft=(rect.x + 120, rect.centery))
+        if self.test:
+            title, help_text = "Probar:", "Flechas: manejar (abajo frena)   R: reiniciar   Esc: volver al editor. Las líneas rojas son los sensores de la IA."
+        else:
+            tool = {t[0]: t for t in TOOLS}[self.tool]
+            title = f"{tool[1]} ({tool[2]}):"
+            help_text = TOOL_HELP[self.tool] + "   Ctrl+rueda: zoom. Rueda apretada o Espacio+arrastrar: mover."
+        title_rect = self.text(title, self.small_font, YELLOW, midleft=(rect.x + 12, rect.centery))
+        max_w = rect.right - title_rect.right - 24
+        while help_text and self.tiny_font.size(help_text)[0] > max_w:
+            help_text = help_text[:help_text.rfind(' ')] if ' ' in help_text else help_text[:-1]
+        self.text(help_text, self.tiny_font, WHITE, midleft=(title_rect.right + 12, rect.centery))
+
+    def modal_box(self):
+        box = pygame.Rect(0, 0, 520, 200)
+        box.center = (self.width // 2, self.height // 2)
+        return box
+
+    @staticmethod
+    def template_rect(k, box):
+        w = (box.w - 70) // 2
+        return pygame.Rect(box.x + 30 + (k % 2) * (w + 10), box.y + 60 + (k // 2) * 46, w, 38)
+
+    def on_modal_click(self, pos):
+        if self.modal == 'templates':
+            box = self.modal_box()
+            for k, (name, _) in enumerate(TEMPLATES):
+                if self.template_rect(k, box).collidepoint(pos):
+                    self.modal = None
+                    self.apply_template(name)
+                    return
+            if not box.collidepoint(pos):
+                self.modal = None
 
     def draw_modal(self):
         overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 170))
         self.screen.blit(overlay, (0, 0))
-        box = pygame.Rect(0, 0, 520, 200)
-        box.center = (self.width // 2, self.height // 2)
+        box = self.modal_box()
         pygame.draw.rect(self.screen, PANEL, box, border_radius=14)
         pygame.draw.rect(self.screen, YELLOW, box, 3, border_radius=14)
-        if self.modal == 'save_name':
+        if self.modal == 'templates':
+            self.text("Elegí una plantilla", self.font, YELLOW, center=(box.centerx, box.top + 32))
+            for k, (_, label) in enumerate(TEMPLATES):
+                r = self.template_rect(k, box)
+                self.draw_button(f"{k + 1}. {label}", r, color=BLUE)
+            self.text("Reemplaza la pista actual (Ctrl+Z para volver)   Esc: cancelar", self.tiny_font, TEXT_DIM,
+                      center=(box.centerx, box.bottom - 22))
+        elif self.modal == 'save_name':
             self.text("Nombre de la pista", self.font, YELLOW, center=(box.centerx, box.top + 32))
             field = pygame.Rect(box.left + 30, box.top + 60, box.w - 60, 44)
             pygame.draw.rect(self.screen, BG, field, border_radius=6)
@@ -879,6 +1120,22 @@ class TrackEditorV3:
             self.text("G: guardar y salir     D: descartar y salir     Esc: seguir editando",
                       self.small_font, WHITE, center=(box.centerx, box.top + 110))
 
+    def draw_test_hud(self):
+        lines = self.test.hud_lines()
+        box = pygame.Rect(self.view.right - 220, self.view.top + 8, 212, 30 + len(lines) * 22)
+        panel = pygame.Surface(box.size, pygame.SRCALPHA)
+        panel.fill((20, 22, 30, 220))
+        self.screen.blit(panel, box)
+        self.text("MODO PRUEBA", self.small_font, YELLOW, topleft=(box.x + 10, box.y + 8))
+        for k, line in enumerate(lines):
+            self.text(line, self.small_font, WHITE, topleft=(box.x + 10, box.y + 30 + k * 22))
+        msg, color = self.test.message
+        w = self.font.size(msg)[0] + 40
+        mbox = pygame.Rect(self.view.centerx - w // 2, self.view.bottom - 56, w, 40)
+        pygame.draw.rect(self.screen, (20, 22, 30), mbox, border_radius=10)
+        pygame.draw.rect(self.screen, color, mbox, 2, border_radius=10)
+        self.text(msg, self.font, color, center=mbox.center)
+
     def draw_toast(self):
         if not self.toast:
             return
@@ -887,7 +1144,7 @@ class TrackEditorV3:
             self.toast = None
             return
         w = self.small_font.size(text)[0] + 40
-        box = pygame.Rect(self.view.centerx - w // 2, self.view.top + 14, w, 38)
+        box = pygame.Rect(self.view.left + 12, self.view.top + 12, w, 38)
         pygame.draw.rect(self.screen, PANEL_LIGHT, box, border_radius=10)
         pygame.draw.rect(self.screen, color, box, 2, border_radius=10)
         self.text(text, self.small_font, WHITE, center=box.center)
@@ -896,9 +1153,15 @@ class TrackEditorV3:
         self.screen.fill(BG)
         self.draw_canvas()
         self.screen.set_clip(self.view)
+        self.draw_symmetry_axes()
         self.draw_objects()
-        self.draw_cursor()
-        self.draw_checklist()
+        if self.test:
+            self.test.draw(self.screen, self.to_screen, self.scale, self.font, self.small_font)
+            self.draw_test_hud()
+        else:
+            self.draw_curve_preview()
+            self.draw_cursor()
+            self.draw_checklist()
         self.screen.set_clip(None)
         self.draw_toolbar()
         self.draw_status()
@@ -912,23 +1175,33 @@ class TrackEditorV3:
         while self.running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    if self.test:
+                        self.test = None
                     self.request_exit()
                 elif event.type == pygame.KEYDOWN:
                     self.on_key(event)
                 elif self.modal:
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        self.on_modal_click(event.pos)
+                elif self.test:
                     continue
-                elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 2, 3):
                     if event.pos[0] < TOOLBAR_W:
                         if event.button == 1:
                             self.on_toolbar_click(event.pos)
                     else:
                         self.on_mouse_down(event.pos, event.button)
-                elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 3):
+                elif event.type == pygame.MOUSEBUTTONUP and event.button in (1, 2, 3):
                     self.on_mouse_up(event.pos)
                 elif event.type == pygame.MOUSEMOTION:
                     self.on_mouse_move(event.pos)
                 elif event.type == pygame.MOUSEWHEEL:
-                    self.do_action('brush+' if event.y > 0 else 'brush-')
+                    if pygame.key.get_mods() & pygame.KMOD_CTRL:
+                        self.zoom_at(pygame.mouse.get_pos(), 1.2 if event.y > 0 else 1 / 1.2)
+                    else:
+                        self.do_action('brush+' if event.y > 0 else 'brush-')
+            if self.test:
+                self.test.update(pygame.key.get_pressed())
             self.draw()
             self.clock.tick(60)
         pygame.quit()
