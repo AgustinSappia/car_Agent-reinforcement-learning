@@ -530,9 +530,12 @@ class TrackEditorV3:
         if not self.spawn or not self.road.get_at((int(self.spawn[0]), int(self.spawn[1])))[:3] != WALL_COLOR:
             self.show_toast("Primero poné la salida sobre el camino", ORANGE)
             return
+        if geo.ray_length(self.road, self.spawn[0], self.spawn[1], self.spawn[2], 80) < 60:
+            self.show_toast("La salida mira contra una pared: ponela en una recta mirando hacia adelante", ORANGE)
+            return
         cps, finish, closed = geo.auto_checkpoints(self.road, self.spawn)
         if not cps:
-            self.show_toast("No pude recorrer la pista desde la salida", RED)
+            self.show_toast("No pude recorrer la pista: probá la salida en una recta", RED)
             return
         self.push_undo()
         self.checkpoints = cps
@@ -543,7 +546,7 @@ class TrackEditorV3:
         if closed:
             self.show_toast(f"{len(cps)} checkpoints ubicados")
         else:
-            self.show_toast(f"{len(cps)} checkpoints, pero la vuelta no cierra: revisalos", ORANGE)
+            self.show_toast(f"{len(cps)} checkpoints, pero la vuelta no cierra: probá la salida en una recta", ORANGE)
 
     def apply_template(self, name):
         self.clear_all(toast=False)
