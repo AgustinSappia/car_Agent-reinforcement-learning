@@ -215,8 +215,8 @@ class TrackSelector:
         before = {t['name'] for t in self.tracks}
         pygame.quit()
         try:
-            import track_editor_v2
-            editor = track_editor_v2.TrackEditorV2(track_name=track_name)
+            import track_editor_v3
+            editor = track_editor_v3.TrackEditorV3(track_name=track_name)
             editor.run()
         except Exception as e:
             print(f"Error lanzando editor: {e}")
