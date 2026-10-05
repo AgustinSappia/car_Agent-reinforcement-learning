@@ -1075,8 +1075,11 @@ if __name__ == "__main__":
         print(f"\n{'='*60}")
         print(f"NO SE SELECCIONÓ NINGUNA PISTA")
         print(f"{'='*60}")
-        print(f"Usando pista procedural por defecto...")
+        print(f"Saliendo...")
         print(f"{'='*60}\n")
+        # Cerrar el selector (Esc o la X) sale del programa en vez de
+        # arrancar el entrenamiento en la pista procedural
+        raise SystemExit(0)
 
     print(f"\n{'='*60}")
     print(f"INICIANDO ENTRENAMIENTO GENÉTICO")
