@@ -26,7 +26,7 @@ def surface_mask(surface, color=None):
 
 
 class World:
-    def __init__(self, road_mask, config, speed_mask=None, slow_mask=None):
+    def __init__(self, road_mask, config, speed_mask=None, slow_mask=None, kind='pista'):
         self.road = road_mask
         self.W, self.H = road_mask.shape
         self.speed_mask = speed_mask
@@ -34,7 +34,7 @@ class World:
         self.cfg = config
         self.sensor_angles = np.array(config.sensor_angles(), dtype=np.float32)
         self.ray_steps = np.arange(SENSOR_STEP, config.sensor_range + 1, SENSOR_STEP, dtype=np.float32)
-        self.actions = np.array(config.actions(), dtype=np.float32)  # (n_acciones, 3)
+        self.actions = np.array(config.actions(kind), dtype=np.float32)  # (n_acciones, 4)
 
     def reset(self, n, x, y, angle):
         self.n = n
@@ -44,6 +44,11 @@ class World:
         self.speed = np.zeros(n, dtype=np.float32)
         self.alive = np.ones(n, dtype=bool)
         self.sensors = np.zeros((n, len(self.sensor_angles)), dtype=np.float32)
+        self.speed_mult = np.ones(n, dtype=np.float32)  # para autos más lentos (bots, modo exhibición)
+
+    def place(self, idx, x, y, angle):
+        self.x[idx], self.y[idx], self.angle[idx] = x, y, angle
+        self.speed[idx] = 0
 
     # ------------------------------------------------------------------ #
     def on_road(self, x, y):
@@ -69,9 +74,11 @@ class World:
     def step(self, idx, action_idx):
         """Aplica las acciones elegidas y mueve los autos idx. Devuelve los que chocaron."""
         act = self.actions[action_idx]
-        steer, throttle, brake = act[:, 0], act[:, 1], act[:, 2]
+        return self.step_raw(idx, act[:, 0], act[:, 1], act[:, 2])
 
-        max_speed = np.full(len(idx), self.cfg.max_speed, dtype=np.float32)
+    def step_raw(self, idx, steer, throttle, brake):
+        """Mueve los autos idx con controles directos (giro -1..1, acelerar 0..1, frenar 0..1)"""
+        max_speed = np.full(len(idx), self.cfg.max_speed, dtype=np.float32) * self.speed_mult[idx]
         if self.speed_mask is not None or self.slow_mask is not None:
             xi = np.clip(self.x[idx].astype(np.int32), 0, self.W - 1)
             yi = np.clip(self.y[idx].astype(np.int32), 0, self.H - 1)
@@ -101,3 +108,14 @@ class World:
         """Seno y coseno del ángulo hacia el objetivo, relativo al frente del auto"""
         rel = np.arctan2(target_y - self.y[idx], target_x - self.x[idx]) - self.angle[idx]
         return np.stack([np.sin(rel), np.cos(rel)], axis=1)
+
+
+def observe(world, scenario, cfg, idx):
+    """Entradas de la red para los autos idx: sensores, velocidad y brújula al objetivo"""
+    parts = [world.read_sensors(idx)]
+    if cfg.use_speed:
+        parts.append((world.speed[idx] / cfg.max_speed)[:, None])
+    if cfg.use_compass:
+        tx, ty = scenario.targets(idx)
+        parts.append(world.compass(idx, tx, ty))
+    return np.concatenate(parts, axis=1)

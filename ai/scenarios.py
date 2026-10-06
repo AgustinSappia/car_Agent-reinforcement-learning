@@ -85,6 +85,10 @@ class Scenario:
         bonus = np.where(self.finished_step >= 0, (max_steps - self.finished_step) * 2.0, 0)
         return np.maximum(self.best, 0) + bonus
 
+    def map_info(self):
+        """Datos del mapa que se guardan junto al cerebro (para la galería y el modo Expo)"""
+        return {}
+
     def mark_progress(self, idx, step, new_progress):
         self.progress[idx] = new_progress
         improved = new_progress > self.best[idx] + 2
@@ -103,6 +107,7 @@ class PistaScenario(Scenario):
     def __init__(self, track_data):
         road = track_data['track_layer']
         self.name = track_data.get('name', 'pista')
+        self.file = track_data.get('file', self.name)
         self.road_surface = road
         self.road_mask = surface_mask(road)
         self.speed_mask = surface_mask(track_data['speed_zones'], (0, 255, 0)) if track_data.get('speed_zones') else None
@@ -138,7 +143,9 @@ class PistaScenario(Scenario):
         self.gate_arr = np.array(self.gates, dtype=np.float32).reshape(-1, 4)
         grid = _grid(self.road_mask)
         if G < 2:
+            # Sin suficientes checkpoints: el puntaje es la distancia recorrida
             self.fields = []
+            self.start_gate, self.start_len = 0, 0.0
             return
         self.fields = []
         for g in range(G):
@@ -266,6 +273,9 @@ class PistaScenario(Scenario):
         self.mark_progress(idx, step, new)
         return done
 
+    def map_info(self):
+        return {'map': self.name, 'map_file': self.file}
+
     def status(self):
         return [f"Vueltas para ganar: {self.required_laps}",
                 f"Checkpoints: {len(self.checkpoints)}" + (f" ({self.auto_note})" if self.auto_note else "")]
@@ -328,21 +338,24 @@ class LaberintoScenario(Scenario):
     title = 'Laberinto'
     goal_text = "Encontrar la salida del laberinto"
 
-    def __init__(self, size='mediano', new_every=0, braid=False, seed=None, W=1570, H=1080):
+    def __init__(self, size='mediano', new_every=0, braid=False, seed=None, W=1570, H=1080, maze_seed=None):
         self.size_name = size
         self.new_every = new_every
         self.braid = braid
         self.W, self.H = W, H
         self.rng = np.random.default_rng(seed)
         self.maze_number = 0
-        self.generate()
+        self.generate(maze_seed)
 
-    def generate(self):
+    def generate(self, maze_seed=None):
+        """Nuevo laberinto. Con maze_seed se puede volver a armar exactamente el mismo."""
+        self.maze_seed = int(self.rng.integers(1 << 30)) if maze_seed is None else int(maze_seed)
+        maze_rng = np.random.default_rng(self.maze_seed)
         cols, rows = MAZE_SIZES[self.size_name]
         cell = min(self.W // cols, self.H // rows)
         ox, oy = (self.W - cell * cols) // 2, (self.H - cell * rows) // 2
         corridor = int(cell * 0.68)
-        passages = generate_maze(cols, rows, self.rng, 0.25 if self.braid else 0.0)
+        passages = generate_maze(cols, rows, maze_rng, 0.25 if self.braid else 0.0)
 
         surf = pygame.Surface((self.W, self.H))
         surf.fill((0, 0, 0))
@@ -425,6 +438,11 @@ class LaberintoScenario(Scenario):
             self.best[fin] = self.start_dist
         return done
 
+    def map_info(self):
+        return {'map': f"Laberinto {self.size_name}",
+                'maze': {'size': self.size_name, 'new_every': self.new_every, 'braid': self.braid,
+                         'seed': self.maze_seed}}
+
     def status(self):
         extra = f", nuevo cada {self.new_every} gen." if self.new_every else ""
         return [f"Tamaño: {self.size_name}{extra}", f"Laberinto n.º {self.maze_number}"]
@@ -435,3 +453,62 @@ class LaberintoScenario(Scenario):
 
     def draw_overlay(self, surf, to_screen, scale, font):
         pass
+
+
+# ---------------------------------------------------------------------- #
+# Varias pistas seguidas
+# ---------------------------------------------------------------------- #
+class CurriculumScenario:
+    """
+    Entrena el mismo cerebro en varias pistas, una después de otra.
+    Pasa a la siguiente pista cuando la mayoría la completa ('dominar') o cada N generaciones ('cada').
+    Así el auto aprende a manejar en general y no se memoriza una sola pista.
+    Todo lo que no está definido acá se lee de la pista actual.
+    """
+    key = 'pista'
+    title = 'Varias pistas'
+    goal_text = "Dominar cada pista y pasar a la siguiente"
+
+    def __init__(self, scenarios, rule='dominar', every=10, threshold=50):
+        self.scenarios = scenarios
+        self.rule, self.every, self.threshold = rule, every, threshold
+        self.index = 0
+        self.since = 0         # generaciones en la pista actual
+        self.rounds = 0        # veces que se completó la lista
+        self.changed = True
+        self.last_rate = 0.0
+
+    @property
+    def current(self):
+        return self.scenarios[self.index]
+
+    def __getattr__(self, name):
+        # Solo se llama para atributos que no tiene el envoltorio
+        return getattr(self.scenarios[self.__dict__['index']], name)
+
+    @property
+    def size(self):
+        return self.current.size
+
+    def start_generation(self, n, generation):
+        if generation > 1 and hasattr(self.current, 'finished_step'):
+            self.last_rate = float((self.current.finished_step >= 0).mean())
+            self.since += 1
+            move = (self.since >= self.every) if self.rule == 'cada' else (self.last_rate * 100 >= self.threshold)
+            if move and len(self.scenarios) > 1:
+                self.index = (self.index + 1) % len(self.scenarios)
+                if self.index == 0:
+                    self.rounds += 1
+                self.since = 0
+                self.changed = True
+        self.current.start_generation(n, generation)
+
+    def map_info(self):
+        return {'map': f"{len(self.scenarios)} pistas", 'map_file': self.scenarios[0].file,
+                'maps': [s.file for s in self.scenarios]}
+
+    def status(self):
+        rule = (f"cambia cada {self.every} gen." if self.rule == 'cada'
+                else f"cambia cuando llega el {self.threshold} %")
+        return [f"Pista {self.index + 1}/{len(self.scenarios)}: {self.current.name}",
+                f"{rule} (gen. anterior: {self.last_rate * 100:.0f} %)"] + self.current.status()[:1]

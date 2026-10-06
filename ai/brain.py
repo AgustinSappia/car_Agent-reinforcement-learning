@@ -6,6 +6,8 @@ todos los autos se guardan juntos: W[capa] tiene forma (población, entradas, sa
 Así una sola multiplicación de matrices calcula la decisión de todos los autos a la vez.
 """
 
+import json
+
 import numpy as np
 
 
@@ -96,14 +98,10 @@ class PopulationBrain:
         return order
 
     # ------------------------------------------------------------------ #
-    def save_best(self, path, i, extra=None):
+    def save_best(self, path, i, meta=None):
+        """Guarda el cerebro del auto i. meta: dict con datos para la galería (escenario, mapa, generación...)"""
         W, b = self.get(i)
-        data = {f"W{k}": w for k, w in enumerate(W)}
-        data.update({f"b{k}": v for k, v in enumerate(b)})
-        data['sizes'] = np.array(self.sizes)
-        for key, value in (extra or {}).items():
-            data[key] = np.array(value)
-        np.savez(path, **data)
+        write_brain(path, self.sizes, W, b, meta)
 
     def load_into_all(self, path, keep_fraction=0.1, mutation_strength=0.3):
         """
@@ -111,11 +109,10 @@ class PopulationBrain:
         y el resto como variaciones, para seguir mejorándolo.
         Devuelve False si el cerebro no es compatible (otro tamaño de red).
         """
-        data = np.load(path)
-        if list(data['sizes']) != self.sizes:
+        data = read_brain(path)
+        if data is None or data['sizes'] != self.sizes:
             return False
-        W = [data[f"W{k}"] for k in range(len(self.W))]
-        b = [data[f"b{k}"] for k in range(len(self.b))]
+        W, b = data['W'], data['b']
         n_keep = max(1, int(self.population * keep_fraction))
         for i in range(self.population):
             self.set(i, (W, b))
@@ -124,3 +121,35 @@ class PopulationBrain:
                     self.W[k][i] += self.rng.normal(0, mutation_strength, W[k].shape).astype(np.float32)
                     self.b[k][i] += self.rng.normal(0, mutation_strength, b[k].shape).astype(np.float32)
         return True
+
+
+# ---------------------------------------------------------------------- #
+# Archivos de cerebros
+# ---------------------------------------------------------------------- #
+def write_brain(path, sizes, W, b, meta=None):
+    data = {f"W{k}": w for k, w in enumerate(W)}
+    data.update({f"b{k}": v for k, v in enumerate(b)})
+    data['sizes'] = np.array(sizes)
+    data['meta'] = np.array(json.dumps(meta or {}))
+    np.savez(path, **data)
+
+
+def read_brain(path):
+    """{'sizes', 'W', 'b', 'meta'} o None si no se puede leer"""
+    try:
+        with np.load(path) as data:
+            sizes = [int(v) for v in data['sizes']]
+            n = len(sizes) - 1
+            meta = json.loads(str(data['meta'])) if 'meta' in data else {}
+            return {'sizes': sizes, 'W': [data[f"W{k}"] for k in range(n)],
+                    'b': [data[f"b{k}"] for k in range(n)], 'meta': meta}
+    except Exception:
+        return None
+
+
+def single_brain(data, copies=1):
+    """PopulationBrain con copias de un cerebro leído con read_brain"""
+    brain = PopulationBrain(data['sizes'], copies)
+    for i in range(copies):
+        brain.set(i, (data['W'], data['b']))
+    return brain

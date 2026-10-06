@@ -308,3 +308,32 @@ def template_spawn(points):
     i = len(curve) // (2 * len(points)) + 2
     (x1, y1), (x2, y2) = curve[i], curve[i + 1]
     return (x1, y1, math.atan2(y2 - y1, x2 - x1))
+
+
+# ---------------------------------------------------------------------- #
+# Cancha de fútbol
+# ---------------------------------------------------------------------- #
+def field_layout(W, H):
+    """
+    Plantilla "Cancha": rectángulo redondeado con un arco saliendo de cada pared lateral.
+    Devuelve {'field': (x, y, w, h), 'radius': r, 'goals': {'azul': rect, 'rojo': rect},
+    'ball': (x, y)}. Los arcos son (x1, y1, x2, y2); 'azul' (izquierda) lo defiende el
+    equipo azul y 'rojo' (derecha) el rojo. Medidas pensadas para 1570x1080 y escaladas.
+    """
+    sx, sy = W / 1570, H / 1080
+    left, top, right, bottom = 110 * sx, 120 * sy, 1460 * sx, 960 * sy
+    gy1, gy2 = 440 * sy, 640 * sy
+    # El arco se mete 2 px en la cancha para que no quede una rendija de pared
+    goal_azul = (40 * sx, gy1, left + 2 * sx, gy2)
+    goal_rojo = (right - 2 * sx, gy1, W - 40 * sx, gy2)
+    return {
+        'field': (left, top, right - left, bottom - top),
+        'radius': int(120 * min(sx, sy)),
+        'goals': {'azul': goal_azul, 'rojo': goal_rojo},
+        'ball': ((left + right) / 2, (top + bottom) / 2),
+    }
+
+
+def normalize_rect(x1, y1, x2, y2):
+    """Rectángulo (x1, y1, x2, y2) con x1 < x2 e y1 < y2"""
+    return (min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2))

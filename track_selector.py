@@ -6,6 +6,8 @@ Selector de pistas estilo videojuego.
 - Acciones: Entrenar, Editar, Duplicar, Renombrar, Eliminar
 - Eliminar pide confirmación y manda la pista a una papelera (se puede deshacer)
 - Se maneja con mouse o con teclado
+- Las canchas de fútbol (archivos con los dos arcos) llevan el cartel "Cancha";
+  select_track(kind='cancha' | 'pista') muestra solo ese tipo
 """
 
 import pygame
@@ -34,6 +36,13 @@ TRACK_SUFFIXES = ['.json', '.png', '_track.png', '_thumb.png', '_checkpoint.png'
                   '_finish.png', '_speed.png', '_slow.png']
 
 NEW_TRACK = 'NEW'  # Marcador de la tarjeta "Nueva pista"
+GOAL_COLORS = {'azul': (40, 110, 255), 'rojo': (235, 50, 50)}
+
+
+def is_field(metadata):
+    """Una cancha de fútbol tiene los dos arcos (azul y rojo)"""
+    goals = metadata.get('goals') or {}
+    return bool(goals.get('azul')) and bool(goals.get('rojo'))
 
 
 def track_files(name, folder=TRACKS_DIR):
@@ -48,7 +57,8 @@ def display_name(metadata, fallback):
         return metadata['display_name']
     created = metadata.get('created', '')
     try:
-        return "Pista " + datetime.strptime(created, "%Y%m%d_%H%M%S").strftime("%d/%m/%Y %H:%M")
+        noun = "Cancha " if is_field(metadata) else "Pista "
+        return noun + datetime.strptime(created, "%Y%m%d_%H%M%S").strftime("%d/%m/%Y %H:%M")
     except ValueError:
         return fallback
 
@@ -72,6 +82,27 @@ def fit_image(img, size):
     return surf
 
 
+def draw_goals(image, metadata):
+    """Copia de la imagen con los arcos pintados encima (en el archivo son solo coordenadas)"""
+    image = image.copy()
+    sx = image.get_width() / metadata.get('width', image.get_width())
+    sy = image.get_height() / metadata.get('height', image.get_height())
+    for side, color in GOAL_COLORS.items():
+        g = (metadata.get('goals') or {}).get(side)
+        if not g:
+            continue
+        rect = pygame.Rect(int(g[0] * sx), int(g[1] * sy), int((g[2] - g[0]) * sx), int((g[3] - g[1]) * sy))
+        fill = pygame.Surface(rect.size, pygame.SRCALPHA)
+        fill.fill((*color, 150))
+        image.blit(fill, rect)
+        pygame.draw.rect(image, color, rect, 6)
+    bs = metadata.get('ball_spawn')
+    if bs:
+        pygame.draw.circle(image, (230, 230, 230), (int(bs[0] * sx), int(bs[1] * sy)), 14)
+        pygame.draw.circle(image, BLACK, (int(bs[0] * sx), int(bs[1] * sy)), 14, 3)
+    return image
+
+
 class TrackSelector:
     """Selector gráfico de pistas con miniaturas"""
 
@@ -84,9 +115,11 @@ class TrackSelector:
     GAP = 25
     PANEL_X = 840
 
-    def __init__(self, width=1280, height=720):
+    def __init__(self, width=1280, height=720, kind=None):
         self.width = width
         self.height = height
+        self.kind = kind            # None = todo | 'cancha' = solo canchas | 'pista' = solo pistas
+        self.noun = "cancha" if kind == 'cancha' else "pista"
         self.init_display()
 
         # Estado
@@ -108,9 +141,9 @@ class TrackSelector:
             self.selected = 1
 
         print("\n" + "=" * 60)
-        print("SELECTOR DE PISTAS")
+        print("SELECTOR DE CANCHAS" if kind == 'cancha' else "SELECTOR DE PISTAS")
         print("=" * 60)
-        print(f"Pistas disponibles: {len(self.tracks)}")
+        print(f"{self.noun.capitalize()}s disponibles: {len(self.tracks)}")
         print("=" * 60 + "\n")
 
     # ------------------------------------------------------------------ #
@@ -120,7 +153,8 @@ class TrackSelector:
         """(Re)abre la ventana. Se llama de nuevo al volver del editor."""
         pygame.init()
         self.screen = pygame.display.set_mode((self.width, self.height))
-        pygame.display.set_caption("Selector de Pistas - Self Driving Car AI")
+        caption = "Elegí una cancha" if self.kind == 'cancha' else "Selector de Pistas"
+        pygame.display.set_caption(f"{caption} - Self Driving Car AI")
         self.clock = pygame.time.Clock()
         pygame.key.set_repeat(300, 60)
         self.title_font = pygame.font.Font(None, 52)
@@ -141,6 +175,9 @@ class TrackSelector:
             try:
                 with open(os.path.join(TRACKS_DIR, json_file), 'r') as f:
                     metadata = json.load(f)
+                field = is_field(metadata)
+                if (self.kind == 'cancha' and not field) or (self.kind == 'pista' and field):
+                    continue
                 track_name = metadata.get('name', json_file[:-5])
                 track_base_path = f"{TRACKS_DIR}/{track_name}"
                 if not os.path.exists(f"{track_base_path}_track.png"):
@@ -151,6 +188,8 @@ class TrackSelector:
                 if not os.path.exists(img_path):
                     img_path = f"{track_base_path}_track.png"
                 image = pygame.image.load(img_path)
+                if field:
+                    image = draw_goals(image, metadata)
 
                 self.tracks.append({
                     'name': track_name,
@@ -159,6 +198,7 @@ class TrackSelector:
                     'image': image,
                     'path': track_base_path,
                     'title': display_name(metadata, track_name),
+                    'is_field': field,
                 })
             except Exception as e:
                 print(f"Error cargando pista {json_file}: {e}")
@@ -190,6 +230,8 @@ class TrackSelector:
         """Lista de cosas que le faltan a la pista para entrenar bien"""
         m = track['metadata']
         issues = []
+        if is_field(m):
+            return issues  # Las canchas no usan salida, meta ni checkpoints
         if not m.get('spawn_point'):
             issues.append("Falta punto de salida")
         if not m.get('finish_line'):
@@ -226,7 +268,7 @@ class TrackSelector:
         new = [t['name'] for t in self.tracks if t['name'] not in before]
         if new:
             self.select_by_name(new[0])
-            self.show_toast("Pista nueva guardada", GREEN)
+            self.show_toast(f"{self.noun.capitalize()} nueva guardada", GREEN)
         elif track_name:
             self.select_by_name(track_name)
 
@@ -349,7 +391,7 @@ class TrackSelector:
             by = 562 + (k // 2) * 46
             buttons.append((bid, label, color, pygame.Rect(bx, by, small_w, 38), has_track))
         if not has_track:
-            buttons = [('new', "CREAR PISTA  (Enter)", GREEN, pygame.Rect(x, 500, w, 52), True)]
+            buttons = [('new', f"CREAR {self.noun.upper()}  (Enter)", GREEN, pygame.Rect(x, 500, w, 52), True)]
         return buttons
 
     def modal_buttons(self):
@@ -503,7 +545,7 @@ class TrackSelector:
             pygame.draw.rect(self.screen, GREEN, plus, 4, border_radius=35)
             pygame.draw.line(self.screen, GREEN, (plus.centerx, plus.top + 18), (plus.centerx, plus.bottom - 18), 5)
             pygame.draw.line(self.screen, GREEN, (plus.left + 18, plus.centery), (plus.right - 18, plus.centery), 5)
-            self.text("Nueva pista  (N)", self.font, GREEN, center=(rect.centerx, rect.top + self.THUMB_H + 20))
+            self.text(f"Nueva {self.noun}  (N)", self.font, GREEN, center=(rect.centerx, rect.top + self.THUMB_H + 20))
         else:
             thumb_rect = pygame.Rect(rect.x, rect.y, self.CARD_W, self.THUMB_H)
             self.screen.blit(item['thumbnail'], thumb_rect)
@@ -513,10 +555,20 @@ class TrackSelector:
                 badge = pygame.Rect(rect.right - 30, rect.top + 8, 22, 22)
                 pygame.draw.circle(self.screen, ORANGE, badge.center, 11)
                 self.text("!", self.small_font, BLACK, center=badge.center)
+            if item['is_field']:
+                self.draw_field_badge((rect.x + 8, rect.top + 8))
 
         if selected:
             color = RED if self.modal == 'delete' else YELLOW
             pygame.draw.rect(self.screen, color, rect.inflate(8, 8), 4, border_radius=12)
+
+    def draw_field_badge(self, topleft):
+        """Cartelito "Cancha" sobre la miniatura"""
+        surf = self.tiny_font.render("Cancha", True, BLACK)
+        badge = surf.get_rect(topleft=topleft).inflate(14, 8)
+        badge.topleft = topleft
+        pygame.draw.rect(self.screen, GREEN, badge, border_radius=8)
+        self.screen.blit(surf, surf.get_rect(center=badge.center))
 
     def draw_detail_panel(self):
         panel = pygame.Rect(self.PANEL_X, 95, self.width - self.PANEL_X - 30, 600)
@@ -524,7 +576,15 @@ class TrackSelector:
         x = panel.x + 20
         track = self.current
 
-        if track is None:
+        if track is None and self.kind == 'cancha':
+            self.text("Crear una cancha nueva", self.big_font, GREEN, topleft=(x, panel.y + 20))
+            lines = ["En el editor elegí la plantilla Cancha (T)",
+                     "o dibujá el campo y poné los dos arcos",
+                     "y la pelota. Después la elegís acá",
+                     "para entrenar a los equipos."]
+            for k, line in enumerate(lines):
+                self.text(line, self.small_font, TEXT_DIM, topleft=(x, panel.y + 75 + k * 28))
+        elif track is None:
             self.text("Crear una pista nueva", self.big_font, GREEN, topleft=(x, panel.y + 20))
             lines = ["Dibujá el circuito, poné la salida,",
                      "la meta y los checkpoints.",
@@ -539,17 +599,28 @@ class TrackSelector:
                 self.preview_cache[key] = fit_image(track['image'], preview_size)
             self.screen.blit(self.preview_cache[key], (x, panel.y + 20))
             pygame.draw.rect(self.screen, PANEL_LIGHT, (x, panel.y + 20, *preview_size), 2)
+            if track['is_field']:
+                self.draw_field_badge((x + 8, panel.y + 28))
 
             y = panel.y + 255
             self.text(self.fit_text(track['title'], self.big_font, panel.w - 40), self.big_font, YELLOW, topleft=(x, y))
             m = track['metadata']
-            info = [
-                ("Vueltas", str(m.get('required_laps', 1))),
-                ("Checkpoints", str(len(m.get('checkpoints', [])))),
-                ("Salida", "Sí" if m.get('spawn_point') else "No"),
-                ("Meta", "Sí" if m.get('finish_line') else "No"),
-                ("Creada", format_date(m.get('created'))),
-            ]
+            if track['is_field']:
+                info = [
+                    ("Arco azul", "Sí"),
+                    ("Arco rojo", "Sí"),
+                    ("Pelota", "Sí" if m.get('ball_spawn') else "Centro"),
+                    ("Salida", "Sí" if m.get('spawn_point') else "No"),
+                    ("Creada", format_date(m.get('created'))),
+                ]
+            else:
+                info = [
+                    ("Vueltas", str(m.get('required_laps', 1))),
+                    ("Checkpoints", str(len(m.get('checkpoints', [])))),
+                    ("Salida", "Sí" if m.get('spawn_point') else "No"),
+                    ("Meta", "Sí" if m.get('finish_line') else "No"),
+                    ("Creada", format_date(m.get('created'))),
+                ]
             for k, (label, value) in enumerate(info):
                 col_x = x + (k % 2) * 190
                 row_y = y + 42 + (k // 2) * 26
@@ -616,8 +687,10 @@ class TrackSelector:
 
     def draw(self):
         self.screen.fill(BG)
-        self.text("SELECCIONÁ UNA PISTA", self.title_font, YELLOW, topleft=(self.GRID_X, 30))
-        self.text(f"{len(self.tracks)} pistas", self.small_font, TEXT_DIM, topleft=(self.GRID_X + 470, 45))
+        title = self.text(f"SELECCIONÁ UNA {self.noun.upper()}", self.title_font, YELLOW, topleft=(self.GRID_X, 30))
+        count = len(self.tracks)
+        self.text(f"{count} {self.noun}{'' if count == 1 else 's'}", self.small_font, TEXT_DIM,
+                  topleft=(max(self.GRID_X + 470, title.right + 30), 45))
 
         self.screen.set_clip(self.grid_area().inflate(10, 10))
         for i, item in enumerate(self.items):
@@ -667,8 +740,9 @@ class TrackSelector:
         return self.result
 
 
-def select_track():
-    selector = TrackSelector()
+def select_track(kind=None):
+    """kind: None = pistas y canchas, 'cancha' = solo canchas, 'pista' = solo pistas"""
+    selector = TrackSelector(kind=kind)
     return selector.run()
 
 

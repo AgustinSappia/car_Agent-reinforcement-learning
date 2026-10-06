@@ -11,6 +11,7 @@ Diferencias con V2:
 - Ayuda y lista de verificación en pantalla
 - Guarda en el mismo formato que V2 (track_loader / train_genetic2 no cambian)
 - Herramienta Curva, checkpoints automáticos, plantillas, zoom, simetría y modo Probar
+- Canchas de fútbol: arcos azul / rojo y pelota como objetos, plantilla "Cancha"
 """
 
 import pygame
@@ -47,6 +48,11 @@ ORANGE = (255, 150, 40)
 CYAN = (70, 210, 230)
 BLUE = (60, 130, 255)
 
+# Arcos de la cancha (solo se dibujan en el editor, en el archivo son coordenadas)
+GOAL_COLORS = {'azul': (40, 110, 255), 'rojo': (235, 50, 50)}
+GOAL_TOOLS = {'goal_azul': 'azul', 'goal_rojo': 'rojo'}
+BALL_RADIUS = 10
+
 TOOLBAR_W = 250
 STATUS_H = 34
 
@@ -60,10 +66,14 @@ TOOLS = [
     ('spawn', "Salida", '5', CYAN),
     ('finish', "Meta", '6', FINISH_LINE_COLOR),
     ('checkpoint', "Checkpoint", '7', CHECKPOINT_COLOR),
-    ('select', "Seleccionar", 'V', ORANGE),
+    ('goal_azul', "Arco azul", '9', GOAL_COLORS['azul']),
+    ('goal_rojo', "Arco rojo", 'R', GOAL_COLORS['rojo']),
+    ('select', "Seleccionar", 'V', ORANGE),  # Columna izquierda: el texto largo no entra a la derecha
+    ('ball', "Pelota", 'B', WHITE),
 ]
 TOOL_KEYS = {pygame.K_1: 'road', pygame.K_2: 'erase', pygame.K_3: 'speed', pygame.K_4: 'slow',
-             pygame.K_5: 'spawn', pygame.K_6: 'finish', pygame.K_7: 'checkpoint', pygame.K_8: 'curve', pygame.K_v: 'select'}
+             pygame.K_5: 'spawn', pygame.K_6: 'finish', pygame.K_7: 'checkpoint', pygame.K_8: 'curve',
+             pygame.K_9: 'goal_azul', pygame.K_r: 'goal_rojo', pygame.K_b: 'ball', pygame.K_v: 'select'}
 
 TOOL_HELP = {
     'road': "Clic y arrastrá para dibujar el camino. Clic derecho borra. Rueda / [ ]: tamaño del pincel.",
@@ -74,10 +84,14 @@ TOOL_HELP = {
     'spawn': "Clic donde arranca el auto y arrastrá hacia donde mira.",
     'finish': "Clic y arrastrá de un borde del camino al otro. La flecha verde es el sentido de carrera. I: invertir.",
     'checkpoint': "Clic y arrastrá de borde a borde para agregar un checkpoint. Los autos deben pasar todos.",
+    'goal_azul': "Arrastrá un rectángulo: el arco que defiende el equipo azul. Se pinta camino abajo para que entre la pelota.",
+    'goal_rojo': "Arrastrá un rectángulo: el arco que defiende el equipo rojo. Se pinta camino abajo para que entre la pelota.",
+    'ball': "Clic donde arranca la pelota en cada saque (si no la ponés, va al centro).",
     'select': "Clic en un objeto para seleccionarlo, arrastrá para moverlo o sus puntas. Supr: borrar. I: invertir meta.",
 }
 
-TEMPLATES = [('oval', "Oval"), ('ocho', "Ocho"), ('curvas', "Curvas en S"), ('chicana', "Chicana")]
+TEMPLATES = [('oval', "Oval"), ('ocho', "Ocho"), ('curvas', "Curvas en S"), ('chicana', "Chicana"),
+             ('cancha', "Cancha")]
 SYMMETRY_LABELS = ["Simetría: no", "Simetría: izq-der", "Simetría: arr-abj", "Simetría: 4 lados"]
 
 MAX_HISTORY = 40
@@ -147,12 +161,14 @@ class TrackEditorV3:
         self.finish = None         # (x1, y1, x2, y2)
         self.checkpoints = []      # [(x1, y1, x2, y2), ...]
         self.required_laps = 3
+        self.goals = {}            # {'azul' | 'rojo': (x1, y1, x2, y2)} (canchas)
+        self.ball = None           # (x, y) saque de la pelota (canchas)
 
         # Estado de edición
         self.tool = 'road'
         self.brush = 30
         self.drag = None           # Lo que se está arrastrando ahora
-        self.selected = None       # ('spawn',) | ('finish',) | ('checkpoint', i)
+        self.selected = None       # ('spawn',) | ('finish',) | ('checkpoint', i) | ('goal', lado) | ('ball',)
         self.undo_stack = []
         self.redo_stack = []
         self.dirty = False
@@ -189,8 +205,13 @@ class TrackEditorV3:
         s.set_colorkey(BLACK)
         return s
 
+    @property
+    def is_field(self):
+        """Es una cancha de fútbol (tiene algún arco o la pelota)"""
+        return bool(self.goals) or self.ball is not None
+
     def update_caption(self):
-        name = self.display_name or self.track_name or "Pista nueva"
+        name = self.display_name or self.track_name or ("Cancha nueva" if self.is_field else "Pista nueva")
         pygame.display.set_caption(f"Editor de Pistas - {name}{' *' if self.dirty else ''}")
 
     @property
@@ -249,7 +270,8 @@ class TrackEditorV3:
         if isinstance(layers, str):
             layers = (layers,)
         return {
-            'objects': (self.spawn, self.finish, list(self.checkpoints), self.required_laps),
+            'objects': (self.spawn, self.finish, list(self.checkpoints), self.required_laps,
+                        dict(self.goals), self.ball),
             'layers': [(name, zlib.compress(pygame.image.tobytes(self._layer(name), 'RGB'), 1))
                        for name in layers],
         }
@@ -261,8 +283,9 @@ class TrackEditorV3:
         self.redo_stack.clear()
 
     def restore(self, state):
-        self.spawn, self.finish, cps, self.required_laps = state['objects']
+        self.spawn, self.finish, cps, self.required_laps, goals, self.ball = state['objects']
         self.checkpoints = list(cps)
+        self.goals = dict(goals)
         for name, data in state['layers']:
             surf = pygame.image.frombytes(zlib.decompress(data), (TRACK_W, TRACK_H), 'RGB')
             self._layer(name).blit(surf, (0, 0))
@@ -331,6 +354,15 @@ class TrackEditorV3:
         self.check_dirty = True
         self.compose_dirty = True
 
+    def paint_goal_road(self, rect):
+        """Pinta camino debajo de un arco para que la pelota pueda entrar"""
+        x1, y1, x2, y2 = rect
+        x1, y1 = math.floor(x1), math.floor(y1)
+        pygame.draw.rect(self.road, ROAD_COLOR, (x1, y1, math.ceil(x2) - x1 + 1, math.ceil(y2) - y1 + 1))
+        self.view_dirty = True
+        self.check_dirty = True
+        self.compose_dirty = True
+
     # ------------------------------------------------------------------ #
     # Objetos: selección
     # ------------------------------------------------------------------ #
@@ -343,6 +375,10 @@ class TrackEditorV3:
             items.append((('finish',), self.finish))
         for i, cp in enumerate(self.checkpoints):
             items.append((('checkpoint', i), cp))
+        if self.ball:
+            items.append((('ball',), self.ball))
+        for side, rect in self.goals.items():
+            items.append((('goal', side), rect))
         return items
 
     def get_object(self, key):
@@ -350,6 +386,10 @@ class TrackEditorV3:
             return self.spawn
         if key[0] == 'finish':
             return self.finish
+        if key[0] == 'ball':
+            return self.ball
+        if key[0] == 'goal':
+            return self.goals[key[1]]
         return self.checkpoints[key[1]]
 
     def set_object(self, key, value):
@@ -357,6 +397,10 @@ class TrackEditorV3:
             self.spawn = value
         elif key[0] == 'finish':
             self.finish = value
+        elif key[0] == 'ball':
+            self.ball = value
+        elif key[0] == 'goal':
+            self.goals[key[1]] = value
         else:
             self.checkpoints[key[1]] = value
         self.mark_changed()
@@ -366,9 +410,9 @@ class TrackEditorV3:
         tol = PICK_RADIUS / self.scale
         best = None
         for key, obj in self.objects():
-            if key[0] == 'spawn':
+            if key[0] in ('spawn', 'ball'):
                 d = math.hypot(cpos[0] - obj[0], cpos[1] - obj[1])
-                if d < tol * 1.6:
+                if d < (tol * 1.6 if key[0] == 'spawn' else max(tol * 1.6, BALL_RADIUS + tol / 2)):
                     return key, 'body'
                 continue
             p1, p2 = obj[:2], obj[2:4]
@@ -376,6 +420,12 @@ class TrackEditorV3:
                 return key, 'p1'
             if math.hypot(cpos[0] - p2[0], cpos[1] - p2[1]) < tol:
                 return key, 'p2'
+            if key[0] == 'goal':
+                # Arco: se agarra de cualquier punto adentro (las puntas cambian el tamaño)
+                x1, y1, x2, y2 = geo.normalize_rect(*obj)
+                if x1 - tol <= cpos[0] <= x2 + tol and y1 - tol <= cpos[1] <= y2 + tol and best is None:
+                    best = (tol, key)
+                continue
             d = dist_point_segment(cpos, p1, p2)
             if d < tol and (best is None or d < best[0]):
                 best = (d, key)
@@ -390,6 +440,10 @@ class TrackEditorV3:
             self.spawn = None
         elif kind == 'finish':
             self.finish = None
+        elif kind == 'ball':
+            self.ball = None
+        elif kind == 'goal':
+            self.goals.pop(self.selected[1], None)
         else:
             self.checkpoints.pop(self.selected[1])
         self.selected = None
@@ -444,11 +498,20 @@ class TrackEditorV3:
             self.mark_changed()
         elif self.tool in ('finish', 'checkpoint'):
             self.drag = ('line', self.tool, c, c)
+        elif self.tool in GOAL_TOOLS:
+            self.drag = ('rect', GOAL_TOOLS[self.tool], c, c)
+        elif self.tool == 'ball':
+            self.push_undo()
+            self.ball = c
+            self.selected = ('ball',)
+            self.drag = ('ball_place',)
+            self.mark_changed()
         elif self.tool == 'select':
             key, part = self.hit_test(c)
             self.selected = key
             if key:
-                self.push_undo()
+                # Al soltar un arco se pinta camino abajo: guardar también esa capa
+                self.push_undo('road' if key[0] == 'goal' else ())
                 self.drag = ('move', key, part, c, self.get_object(key))
 
     def on_mouse_move(self, pos):
@@ -471,13 +534,18 @@ class TrackEditorV3:
             if math.hypot(c[0] - origin[0], c[1] - origin[1]) > 5:
                 self.spawn = (origin[0], origin[1], math.atan2(c[1] - origin[1], c[0] - origin[0]))
                 self.mark_changed()
-        elif kind == 'line':
-            self.drag = ('line', self.drag[1], self.drag[2], c)
+        elif kind in ('line', 'rect'):
+            self.drag = (kind, self.drag[1], self.drag[2], c)
+        elif kind == 'ball_place':
+            self.ball = c
+            self.mark_changed()
         elif kind == 'move':
             _, key, part, start, orig = self.drag
             dx, dy = c[0] - start[0], c[1] - start[1]
             if key[0] == 'spawn':
                 self.set_object(key, (orig[0] + dx, orig[1] + dy, orig[2]))
+            elif key[0] == 'ball':
+                self.set_object(key, self.clamp((orig[0] + dx, orig[1] + dy)))
             elif part == 'p1':
                 self.set_object(key, (c[0], c[1], orig[2], orig[3]))
             elif part == 'p2':
@@ -503,11 +571,26 @@ class TrackEditorV3:
                     self.checkpoints.append(line)
                     self.selected = ('checkpoint', len(self.checkpoints) - 1)
                 self.mark_changed()
+        elif self.drag[0] == 'rect':
+            # Arco: reemplaza al anterior del mismo color
+            _, side, a, b = self.drag
+            if abs(b[0] - a[0]) * self.scale > 8 and abs(b[1] - a[1]) * self.scale > 8:
+                self.push_undo('road')
+                self.goals[side] = geo.normalize_rect(a[0], a[1], b[0], b[1])
+                self.paint_goal_road(self.goals[side])
+                self.selected = ('goal', side)
+                self.mark_changed()
+            else:
+                self.show_toast("Arrastrá un rectángulo para dibujar el arco", ORANGE)
         elif self.drag[0] == 'move':
             # Si no se movió nada, sacar el snapshot que no hizo falta
             _, key, _, _, orig = self.drag
             if self.get_object(key) == orig and self.undo_stack:
                 self.undo_stack.pop()
+            elif key[0] == 'goal':
+                rect = self.get_object(key)
+                self.set_object(key, geo.normalize_rect(*self.clamp(rect[:2]), *self.clamp(rect[2:])))
+                self.paint_goal_road(self.goals[key[1]])
         self.drag = None
 
 
@@ -550,6 +633,9 @@ class TrackEditorV3:
 
     def apply_template(self, name):
         self.clear_all(toast=False)
+        if name == 'cancha':
+            self.apply_field_template()
+            return
         pts, width = geo.template_points(name, TRACK_W, TRACK_H)
         brush, symmetry = self.brush, self.symmetry
         self.brush, self.symmetry = width // 2, 0
@@ -563,7 +649,22 @@ class TrackEditorV3:
         self.mark_changed()
         self.show_toast(f"Plantilla {dict(TEMPLATES)[name]} creada (Ctrl+Z para volver)")
 
+    def apply_field_template(self):
+        """Cancha: rectángulo redondeado con los dos arcos y la pelota en el centro"""
+        layout = geo.field_layout(TRACK_W, TRACK_H)
+        pygame.draw.rect(self.road, ROAD_COLOR, [round(v) for v in layout['field']],
+                         border_radius=layout['radius'])
+        for rect in layout['goals'].values():
+            self.paint_goal_road(rect)
+        self.goals = dict(layout['goals'])
+        self.ball = layout['ball']
+        self.mark_changed()
+        self.show_toast("Plantilla Cancha creada (Ctrl+Z para volver)")
+
     def start_test(self):
+        if self.is_field:
+            self.show_toast("La prueba de manejo es para pistas", ORANGE)
+            return
         if not self.spawn or self.road.get_at((int(self.spawn[0]), int(self.spawn[1])))[:3] == WALL_COLOR:
             self.show_toast("Para probar, poné la salida sobre el camino", ORANGE)
             return
@@ -650,15 +751,17 @@ class TrackEditorV3:
             self.request_exit()
 
     def clear_all(self, toast=True):
+        what = "Cancha borrada" if self.is_field else "Pista borrada"
         self.push_undo(('road', 'speed', 'slow'))
         self.road.fill(WALL_COLOR)
         self.speed.fill(BLACK)
         self.slow.fill(BLACK)
         self.spawn, self.finish, self.checkpoints = None, None, []
+        self.goals, self.ball = {}, None
         self.selected = None
         self.mark_changed()
         if toast:
-            self.show_toast("Pista borrada (Ctrl+Z para deshacer)", ORANGE)
+            self.show_toast(f"{what} (Ctrl+Z para deshacer)", ORANGE)
 
     # ------------------------------------------------------------------ #
     # Verificación
@@ -669,6 +772,17 @@ class TrackEditorV3:
             self._road_ok = pygame.transform.average_color(self.road)[:3] != WALL_COLOR
             self.check_dirty = False
         road_ok = self._road_ok
+        if self.is_field:
+            # None = opcional (no cuenta como faltante)
+            ball_ok = None
+            if self.ball:
+                ball_ok = self.road.get_at((int(self.ball[0]), int(self.ball[1])))[:3] != WALL_COLOR
+            return [
+                ("Cancha dibujada", road_ok),
+                ("Arco azul", 'azul' in self.goals),
+                ("Arco rojo", 'rojo' in self.goals),
+                ("Pelota sobre la cancha" if self.ball else "Pelota (opcional: centro)", ball_ok),
+            ]
         spawn_on_road = False
         if self.spawn:
             x, y = int(self.spawn[0]), int(self.spawn[1])
@@ -742,6 +856,12 @@ class TrackEditorV3:
             'modified': stamp,
             'version': 3,
         }
+        # Cancha de fútbol: es cancha cuando tiene los dos arcos
+        if self.goals:
+            metadata['goals'] = {side: [round(v) for v in geo.normalize_rect(*rect)]
+                                 for side, rect in sorted(self.goals.items())}
+        if self.ball:
+            metadata['ball_spawn'] = [round(self.ball[0]), round(self.ball[1])]
         if self.display_name:
             metadata['display_name'] = self.display_name
         with open(f"{base}.json", 'w') as f:
@@ -749,8 +869,8 @@ class TrackEditorV3:
 
         self.dirty = False
         self.update_caption()
-        self.show_toast("Pista guardada")
-        print(f"✓ Pista guardada: {name}")
+        self.show_toast("Cancha guardada" if self.is_field else "Pista guardada")
+        print(f"✓ {'Cancha' if self.is_field else 'Pista'} guardada: {name}")
 
     def load_track(self, name):
         base = os.path.join('tracks', name)
@@ -780,6 +900,11 @@ class TrackEditorV3:
         self.finish = (fl[0] * sx, fl[1] * sy, fl[2] * sx, fl[3] * sy) if fl else None
         self.checkpoints = [(c[0] * sx, c[1] * sy, c[2] * sx, c[3] * sy) for c in meta.get('checkpoints', [])]
         self.required_laps = int(meta.get('required_laps', 3))
+        goals = meta.get('goals') or {}
+        self.goals = {side: (g[0] * sx, g[1] * sy, g[2] * sx, g[3] * sy)
+                      for side, g in goals.items() if side in GOAL_COLORS and g and len(g) >= 4}
+        bs = meta.get('ball_spawn')
+        self.ball = (bs[0] * sx, bs[1] * sy) if bs else None
         self.track_name = name
         self.display_name = meta.get('display_name')
         self.created = meta.get('created')
@@ -810,7 +935,7 @@ class TrackEditorV3:
                 self.name_text += event.unicode
             return
         if self.modal == 'templates':
-            choice = {pygame.K_1: 0, pygame.K_2: 1, pygame.K_3: 2, pygame.K_4: 3}.get(key)
+            choice = {pygame.K_1 + k: k for k in range(len(TEMPLATES))}.get(key)
             if choice is not None:
                 self.modal = None
                 self.apply_template(TEMPLATES[choice][0])
@@ -981,8 +1106,52 @@ class TrackEditorV3:
             pygame.draw.rect(self.screen, color, r.inflate(10, 6), border_radius=8)
             self.text(label, self.small_font, WHITE, center=r.center)
 
+    def draw_goal(self, rect, side, selected=False):
+        """Arco: rectángulo translúcido con red y cartel ARCO AZUL / ARCO ROJO"""
+        x1, y1, x2, y2 = geo.normalize_rect(*rect)
+        a, b = self.to_screen((x1, y1)), self.to_screen((x2, y2))
+        r = pygame.Rect(int(a[0]), int(a[1]), max(2, int(b[0] - a[0])), max(2, int(b[1] - a[1])))
+        color = GOAL_COLORS[side]
+        net = pygame.Surface(r.size, pygame.SRCALPHA)
+        net.fill((*color, 70))
+        step = max(6, int(14 * self.scale))
+        for gx in range(0, r.w, step):
+            pygame.draw.line(net, (*color, 150), (gx, 0), (gx, r.h))
+        for gy in range(0, r.h, step):
+            pygame.draw.line(net, (*color, 150), (0, gy), (r.w, gy))
+        self.screen.blit(net, r)
+        if selected:
+            pygame.draw.rect(self.screen, YELLOW, r.inflate(6, 6), 3)
+        pygame.draw.rect(self.screen, color, r, 3)
+        for p in (a, b):
+            pygame.draw.circle(self.screen, WHITE if selected else color, (int(p[0]), int(p[1])), 6 if selected else 4)
+        # Cartel (vertical si el arco es alto y angosto)
+        label = self.tiny_font.render(f"ARCO {side.upper()}", True, WHITE)
+        if r.h > r.w:
+            label = pygame.transform.rotate(label, 90)
+        bg = label.get_rect(center=r.center).inflate(8, 8)
+        pygame.draw.rect(self.screen, color, bg, border_radius=6)
+        self.screen.blit(label, label.get_rect(center=r.center))
+
+    def draw_ball(self, pos, selected=False, color=WHITE):
+        p = self.to_screen(pos)
+        c = (int(p[0]), int(p[1]))
+        radius = max(7, int(BALL_RADIUS * self.scale))
+        if selected:
+            pygame.draw.circle(self.screen, YELLOW, c, radius + 6, 3)
+        pygame.draw.circle(self.screen, color, c, radius)
+        pygame.draw.circle(self.screen, BLACK, c, radius, 2)
+        pygame.draw.circle(self.screen, BLACK, c, max(2, radius // 3))
+
     def draw_objects(self):
         sel = self.selected
+        for side, rect in self.goals.items():
+            self.draw_goal(rect, side, sel == ('goal', side))
+        if self.drag and self.drag[0] == 'rect':
+            _, side, a, b = self.drag
+            self.draw_goal((a[0], a[1], b[0], b[1]), side)
+        if self.ball:
+            self.draw_ball(self.ball, sel == ('ball',))
         for i, cp in enumerate(self.checkpoints):
             self.draw_line_object(cp, CHECKPOINT_COLOR, 4, str(i + 1), sel == ('checkpoint', i))
         if self.finish:
@@ -1014,13 +1183,18 @@ class TrackEditorV3:
         if self.tool in ('road', 'erase', 'speed', 'slow'):
             color = {'road': WHITE, 'erase': RED, 'speed': SPEED_ZONE_COLOR, 'slow': SLOW_ZONE_COLOR}[self.tool]
             pygame.draw.circle(self.screen, color, mouse, max(2, int(self.brush * self.scale)), 2)
+        elif self.tool == 'ball' and not self.drag:
+            self.draw_ball(self.to_canvas(mouse), color=(170, 170, 170))
         elif self.tool == 'select':
             key, part = self.hit_test(self.to_canvas(mouse))
             if key and key != self.selected:
                 obj = self.get_object(key)
-                if key[0] == 'spawn':
+                if key[0] in ('spawn', 'ball'):
                     p = self.to_screen(obj[:2])
                     pygame.draw.circle(self.screen, ORANGE, (int(p[0]), int(p[1])), 15, 2)
+                elif key[0] == 'goal':
+                    a, b = self.to_screen(obj[:2]), self.to_screen(obj[2:4])
+                    pygame.draw.rect(self.screen, ORANGE, pygame.Rect(a, (b[0] - a[0], b[1] - a[1])).inflate(4, 4), 2)
                 else:
                     pygame.draw.line(self.screen, ORANGE, self.to_screen(obj[:2]), self.to_screen(obj[2:4]), 2)
 
@@ -1047,17 +1221,19 @@ class TrackEditorV3:
     def draw_checklist(self):
         """Recuadro en la esquina del lienzo con lo que falta para entrenar"""
         items = self.checklist()
-        box = pygame.Rect(0, 0, 200, 30 + len(items) * 20)
+        width = max([200] + [self.tiny_font.size(label)[0] + 40 for label, _ in items])
+        box = pygame.Rect(0, 0, width, 30 + len(items) * 20)
         box.topright = (self.view.right - 8, self.view.top + 8)
         panel = pygame.Surface(box.size, pygame.SRCALPHA)
         panel.fill((20, 22, 30, 210))
         self.screen.blit(panel, box)
-        all_ok = all(ok for _, ok in items)
+        all_ok = all(ok is not False for _, ok in items)
         self.text("Lista para entrenar" if all_ok else "Falta para entrenar:", self.tiny_font,
                   GREEN if all_ok else ORANGE, topleft=(box.x + 10, box.y + 8))
         for k, (label, ok) in enumerate(items):
             cy = box.y + 28 + k * 20
-            pygame.draw.circle(self.screen, GREEN if ok else RED, (box.x + 16, cy + 6), 5)
+            dot = TEXT_DIM if ok is None else GREEN if ok else RED
+            pygame.draw.circle(self.screen, dot, (box.x + 16, cy + 6), 5)
             self.text(label, self.tiny_font, WHITE if ok else TEXT_DIM, topleft=(box.x + 28, cy))
 
     def draw_status(self):
@@ -1076,7 +1252,7 @@ class TrackEditorV3:
         self.text(help_text, self.tiny_font, WHITE, midleft=(title_rect.right + 12, rect.centery))
 
     def modal_box(self):
-        box = pygame.Rect(0, 0, 520, 200)
+        box = pygame.Rect(0, 0, 520, 250 if self.modal == 'templates' else 200)
         box.center = (self.width // 2, self.height // 2)
         return box
 
@@ -1111,7 +1287,7 @@ class TrackEditorV3:
             self.text("Reemplaza la pista actual (Ctrl+Z para volver)   Esc: cancelar", self.tiny_font, TEXT_DIM,
                       center=(box.centerx, box.bottom - 22))
         elif self.modal == 'save_name':
-            self.text("Nombre de la pista", self.font, YELLOW, center=(box.centerx, box.top + 32))
+            self.text("Nombre de la cancha" if self.is_field else "Nombre de la pista", self.font, YELLOW, center=(box.centerx, box.top + 32))
             field = pygame.Rect(box.left + 30, box.top + 60, box.w - 60, 44)
             pygame.draw.rect(self.screen, BG, field, border_radius=6)
             pygame.draw.rect(self.screen, WHITE, field, 2, border_radius=6)

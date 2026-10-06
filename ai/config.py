@@ -28,6 +28,10 @@ ACTION_SETS = {
     },
 }
 
+# Entradas extra del fútbol: pelota (3), velocidad de la pelota (2), arco rival (3),
+# arco propio (2), compañero más cercano (3), rival más cercano (3), puede patear (1)
+FOOTBALL_INPUTS = 17
+
 # Tamaños de red: capas ocultas
 BRAIN_SIZES = {
     'mini': [6],
@@ -73,22 +77,26 @@ class AgentConfig:
         spread = math.radians(self.sensor_spread)
         return [-spread / 2 + spread * i / (n - 1) for i in range(n)]
 
-    def input_size(self):
-        return self.num_sensors + (1 if self.use_speed else 0) + (2 if self.use_compass else 0)
+    # kind: 'pista', 'laberinto' o 'futbol'. El fútbol tiene entradas y acciones propias.
+    def input_size(self, kind='pista'):
+        base = self.num_sensors + (1 if self.use_speed else 0)
+        if kind == 'futbol':
+            return base + FOOTBALL_INPUTS
+        return base + (2 if self.use_compass else 0)
 
-    def actions(self):
-        return ACTION_SETS[self.action_set]['actions']
+    def actions(self, kind='pista'):
+        """Lista de (giro, acelerar, frenar, patear)"""
+        acts = [tuple(a) + (0,) for a in ACTION_SETS[self.action_set]['actions']]
+        if kind == 'futbol':
+            acts.append((0, 1, 0, 1))
+        return acts
 
-    def layer_sizes(self):
-        return [self.input_size()] + BRAIN_SIZES[self.brain_size] + [len(self.actions())]
+    def layer_sizes(self, kind='pista'):
+        return [self.input_size(kind)] + BRAIN_SIZES[self.brain_size] + [len(self.actions(kind))]
 
-    def num_params(self):
-        sizes = self.layer_sizes()
+    def num_params(self, kind='pista'):
+        sizes = self.layer_sizes(kind)
         return sum(a * b + b for a, b in zip(sizes, sizes[1:]))
-
-    def brain_signature(self):
-        """Dos configuraciones con la misma firma pueden compartir cerebro"""
-        return 'x'.join(str(s) for s in self.layer_sizes())
 
     # ---------------------------------------------------------------- #
     def to_dict(self):
@@ -116,8 +124,8 @@ def list_profiles():
     return sorted(f[:-5] for f in os.listdir(PROFILES_DIR) if f.endswith('.json'))
 
 
-def brain_path(profile, scenario):
-    return os.path.join(PROFILES_DIR, f"{profile}_{scenario}.npz")
+def brain_path(profile, scenario, suffix=''):
+    return os.path.join(PROFILES_DIR, f"{profile}_{scenario}{suffix}.npz")
 
 
 PRESETS = {
