@@ -33,6 +33,9 @@ BALL_FRICTION = 0.985
 WALL_BOUNCE = 0.75
 IDLE_SPEED = 0.3       # más lento que esto cuenta como quieto
 CROWD_DIST = 70        # dos compañeros más cerca que esto están amontonados
+HOLD_SPEED = 0.85      # con la pelota pegada, el auto anda a este porcentaje de su velocidad máxima
+GOOD_KICK_COS = 0.85   # una patada es "útil" si la pelota sale a menos de ~30° del arco rival
+BALL_CONTROLS = [('pegada', "Pegada"), ('libre', "Libre")]
 
 GRASS = (46, 125, 60)
 GRASS_DARK = (40, 112, 54)
@@ -170,8 +173,10 @@ class FootballSim:
     del equipo (c % PPM) // team_size. PPM = jugadores por partido.
     """
 
-    def __init__(self, field, cfg, n_matches, team_size, two_teams=True, rng=None):
+    def __init__(self, field, cfg, n_matches, team_size, two_teams=True, rng=None, control='libre'):
         self.field = field
+        # 'pegada': al tocar la pelota de frente queda pegada al auto hasta que patea, choca o se la roba un rival
+        self.sticky = control == 'pegada'
         self.cfg = cfg
         self.M = n_matches
         self.N = team_size
@@ -202,6 +207,9 @@ class FootballSim:
         self.score = np.zeros((M, 2), dtype=np.int32)
         self.touches = np.zeros(self.C, dtype=np.int32)
         self.kicks = np.zeros(self.C, dtype=np.int32)
+        self.good_kicks = np.zeros(self.C, dtype=np.int32)      # patadas que salen hacia el arco rival
+        self.owner = np.full(M, -1, dtype=np.int32)             # auto que tiene la pelota pegada (o -1)
+        self.grab_cd = np.zeros(self.C, dtype=np.int32)         # pasos hasta poder volver a agarrarla
         self.goals_by = np.zeros(self.C, dtype=np.int32)
         self.cooldown = np.zeros(self.C, dtype=np.int32)
         self.touching = np.zeros(self.C, dtype=bool)
@@ -221,6 +229,7 @@ class FootballSim:
         self.bx[matches], self.by[matches] = self.field.ball_spawn
         self.bvx[matches] = 0
         self.bvy[matches] = 0
+        self.owner[matches] = -1
         # Distancia inicial de la pelota a cada arco, para medir avances
         for t in range(self.teams):
             for k in range(self.N):
@@ -327,6 +336,10 @@ class FootballSim:
             ty = np.where(support, by - uy * 140 + perp_y * lat, ty)
             tx = np.where(hold, mg[:, 0] + (bx - mg[:, 0]) * 0.35 + perp_x * lat, tx)
             ty = np.where(hold, mg[:, 1] + (by - mg[:, 1]) * 0.35 + perp_y * lat, ty)
+        # Con la pelota pegada: va hacia el arco y patea cuando está cerca y mirándolo
+        has = (self.owner[m] == cars) if self.sticky else np.zeros(len(cars), dtype=bool)
+        tx = np.where(has, og[:, 0], tx)
+        ty = np.where(has, og[:, 1], ty)
         want = np.arctan2(ty - cy, tx - cx)
         diff = (want - w.angle[cars] + math.pi) % (2 * math.pi) - math.pi
         steer = np.where(np.abs(diff) > 0.1, np.sign(diff), 0).astype(np.float32)
@@ -334,7 +347,11 @@ class FootballSim:
         throttle[np.hypot(tx - cx, ty - cy) < 24] = 0   # ya llegó a su lugar
         brake = np.zeros(len(cars), dtype=np.float32)
         facing_goal = np.cos(w.angle[cars]) * ux + np.sin(w.angle[cars]) * uy > 0.85
-        kick = (behind & facing_goal & (dist_ball < KICK_RANGE + BALL_R)).astype(np.float32)
+        kick = behind & facing_goal & (dist_ball < KICK_RANGE + BALL_R)
+        if self.sticky:
+            near_goal = np.hypot(og[:, 0] - cx, og[:, 1] - cy) < 420
+            kick = np.where(has, facing_goal & near_goal, kick & False)
+        kick = kick.astype(np.float32)
         return steer, throttle, brake, kick
 
     def action_controls(self, action_idx):
@@ -351,10 +368,14 @@ class FootballSim:
         # Contra la pared: vuelve a donde estaba y frena
         w.x[crashed], w.y[crashed] = px[crashed], py[crashed]
         w.speed[crashed] = 0
+        if self.sticky:
+            o = self.owner[self.owner >= 0]
+            w.speed[o] = np.minimum(w.speed[o], HOLD_SPEED * self.cfg.max_speed * w.speed_mult[o])
         self._car_collisions()
         self._ball_contacts(kick)
         goals = self._move_ball()
         self.cooldown = np.maximum(self.cooldown - 1, 0)
+        self.grab_cd = np.maximum(self.grab_cd - 1, 0)
         self._accumulate()
         self.steps += 1
         return goals
@@ -387,9 +408,10 @@ class FootballSim:
         d = np.hypot(dx, dy) + 1e-6
         nx, ny = dx / d, dy / d
         ca, sa = np.cos(w.angle), np.sin(w.angle)
+        busy = self._hold(kick, d) if self.sticky else np.zeros(self.M, dtype=bool)
 
         # Empujón: la pelota sale despedida en la dirección del contacto
-        touch = d < CAR_R + BALL_R
+        touch = (d < CAR_R + BALL_R) & ~busy[m]
         new_touch = touch & ~self.touching
         self.touches += new_touch
         self.touching = touch
@@ -415,20 +437,93 @@ class FootballSim:
 
         # Patada: la pelota tiene que estar cerca y adelante del auto
         front = (nx * ca + ny * sa) > 0.55
-        can = (kick > 0) & (self.cooldown == 0) & front & (d < KICK_RANGE + BALL_R)
+        can = (kick > 0) & (self.cooldown == 0) & front & (d < KICK_RANGE + BALL_R) & ~busy[m]
         self.cooldown[(kick > 0) & (self.cooldown == 0)] = KICK_COOLDOWN // 2
         if can.any():
             c = np.flatnonzero(can)
             mm = m[c]
             self.bvx[mm] += ca[c] * KICK_POWER
             self.bvy[mm] += sa[c] * KICK_POWER
-            self.cooldown[c] = KICK_COOLDOWN
-            self.kicks[c] += 1
-            self.last_touch[mm] = c
+            self._after_kick(c, mm)
+        if self.sticky:
+            self._grab(d, front, busy)
         speed = np.hypot(self.bvx, self.bvy)
         too_fast = speed > BALL_MAX_SPEED
         self.bvx[too_fast] *= BALL_MAX_SPEED / speed[too_fast]
         self.bvy[too_fast] *= BALL_MAX_SPEED / speed[too_fast]
+
+    def _after_kick(self, c, mm):
+        self.cooldown[c] = KICK_COOLDOWN
+        self.kicks[c] += 1
+        self.last_touch[mm] = c
+        # ¿Sale hacia el arco rival?
+        g = self.opp_goal(c)
+        gx, gy = g[:, 0] - self.bx[mm], g[:, 1] - self.by[mm]
+        v = np.hypot(self.bvx[mm], self.bvy[mm]) * np.hypot(gx, gy) + 1e-6
+        good = (self.bvx[mm] * gx + self.bvy[mm] * gy) / v > GOOD_KICK_COS
+        self.good_kicks[c[good]] += 1
+
+    def _release(self, matches, cooldown):
+        o = self.owner[matches]
+        self.grab_cd[o] = cooldown
+        self.owner[matches] = -1
+
+    def _hold(self, kick, d):
+        """Pelota pegada: robos, patadas y llevarla adelante del auto. Devuelve los partidos que
+        ya no hay que tocar en este paso (la pelota la tiene alguien o se acaba de patear)."""
+        w, m = self.world, self.match_of
+        busy = np.zeros(self.M, dtype=bool)
+        if not (self.owner >= 0).any():
+            return busy
+        # Robo: un rival toca la pelota y se suelta
+        owner_team = self.team_of[np.maximum(self.owner, 0)][m]
+        steal = (self.owner[m] >= 0) & (self.team_of != owner_team) & (d < CAR_R + BALL_R + 2)
+        if steal.any():
+            self._release(np.unique(m[steal]), 30)
+        held = np.flatnonzero(self.owner >= 0)
+        o = self.owner[held]
+        ca, sa = np.cos(w.angle[o]), np.sin(w.angle[o])
+        fx = w.x[o] + ca * (CAR_R + BALL_R + 1)
+        fy = w.y[o] + sa * (CAR_R + BALL_R + 1)
+        # Patada: sale disparada hacia adelante
+        shoot = (kick[o] > 0) & (self.cooldown[o] == 0)
+        if shoot.any():
+            mm, c = held[shoot], o[shoot]
+            self.bvx[mm] = ca[shoot] * (KICK_POWER + w.speed[c])
+            self.bvy[mm] = sa[shoot] * (KICK_POWER + w.speed[c])
+            self._after_kick(c, mm)
+            self._release(mm, 20)
+            busy[mm] = True
+        # El resto la lleva adelante; si adelante hay pared, se le escapa
+        keep = ~shoot
+        free = w.on_road(fx, fy) & w.on_road(fx + ca * BALL_R, fy + sa * BALL_R)
+        ok = keep & free
+        mm = held[ok]
+        self.bx[mm], self.by[mm] = fx[ok], fy[ok]
+        self.bvx[mm] = ca[ok] * w.speed[o[ok]]
+        self.bvy[mm] = sa[ok] * w.speed[o[ok]]
+        busy[mm] = True
+        lost = held[keep & ~free]
+        if len(lost):
+            self.bvx[lost] = 0
+            self.bvy[lost] = 0
+            self._release(lost, 15)
+        return busy
+
+    def _grab(self, d, front, busy):
+        """Un auto que toca la pelota de frente se queda con ella (el más cercano de cada partido)"""
+        m = self.match_of
+        cand = np.flatnonzero((self.grab_cd == 0) & front & (d < CAR_R + BALL_R + 4)
+                              & (self.owner[m] < 0) & ~busy[m])
+        if not len(cand):
+            return
+        best = np.full(self.M, np.inf)
+        np.minimum.at(best, m[cand], d[cand])
+        win = cand[d[cand] <= best[m[cand]]]
+        mm, first = np.unique(m[win], return_index=True)
+        self.owner[mm] = win[first]
+        self.last_touch[mm] = win[first]
+        self.touches[win[first]] += 1
 
     def _move_ball(self):
         w = self.world
@@ -498,6 +593,7 @@ class FootballSim:
             'conceded': (self.score[:, 1 - t] if self.teams == 2 else self.score[:, 1]).astype(np.float32),
             'own_goals': self.own_goals[:, t].astype(np.float32),
             'touches': np.minimum(self.touches[cars].sum(axis=1), 30).astype(np.float32),
+            'good_kicks': np.minimum(self.good_kicks[cars].sum(axis=1), 15).astype(np.float32),
             'advance': np.maximum(self.advance[:, t], 0),
             'near': self.near[:, t] / steps,
             'crowd': self.crowd[:, t] / steps,
@@ -511,7 +607,7 @@ class FootballSim:
         for t in range(self.teams):
             p = self.team_breakdown(t)
             fit[:, t] = (p['goals'] * c.r_goal - p['conceded'] * c.p_conceded - p['own_goals'] * c.p_own_goal
-                         + p['touches'] * c.r_touch + p['advance'] * c.r_advance + p['near'] * c.r_near
+                         + p['touches'] * c.r_touch + p['good_kicks'] * c.r_kick + p['advance'] * c.r_advance + p['near'] * c.r_near
                          - p['crowd'] * c.p_crowd - p['idle'] * c.p_idle)
         return fit
 
@@ -524,8 +620,9 @@ class FootballScenario:
     title = 'Fútbol'
     goal_text = "Meter la pelota en el arco rival"
 
-    def __init__(self, field, team_size=1, opponent='bot_normal', match_steps=1500):
+    def __init__(self, field, team_size=1, opponent='bot_normal', match_steps=1500, ball_control='libre'):
         self.field = field
+        self.ball_control = ball_control
         self.team_size = team_size
         self.opponent = opponent
         self.match_steps = match_steps
@@ -554,14 +651,15 @@ class FootballScenario:
         return dict(OPPONENTS)[self.opponent]
 
     def status(self):
-        return [f"Rival: {self.opponent_label()}  ·  {self.team_size} por equipo", f"Cancha: {self.field.name}"]
+        control = self.ball_control
+        return [f"Rival: {self.opponent_label()}  ·  {self.team_size} por equipo", f"Cancha: {self.field.name}  ·  pelota {control}"]
 
     def draw_overlay(self, surf, to_screen, scale, font):
         pass
 
     def map_info(self):
         return {'map': self.field.name, 'map_file': self.field.file, 'team_size': self.team_size,
-                'opponent': self.opponent, 'match_steps': self.match_steps}
+                'opponent': self.opponent, 'match_steps': self.match_steps, 'ball_control': self.ball_control}
 
 
 # ---------------------------------------------------------------------- #

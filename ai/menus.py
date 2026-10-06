@@ -320,6 +320,9 @@ STEPPERS = {st.key: st for st in [
                help_text="Castigo extra cuando el gol en contra lo hace un jugador del propio equipo."),
     ui.Stepper('r_touch', "Tocar la pelota", lo=0, hi=100, step=5, fmt="+{}",
                help_text="Puntos por cada toque (cuenta hasta 30 por partido). Ayuda al principio, cuando todavía no hay goles."),
+    ui.Stepper('r_kick', "Patada útil", lo=0, hi=300, step=10, fmt="+{}",
+               help_text="Puntos por cada patada que manda la pelota hacia el arco rival (cuenta hasta 15 por partido). "
+                         "No premia patear al aire, para que no aprendan a patear sin parar."),
     ui.Stepper('r_advance', "Llevarla al arco", lo=0.0, hi=5.0, step=0.2, fmt="+{:.1f}",
                help_text="Puntos por cada píxel que la pelota se acerca al arco rival (y se restan si se aleja)."),
     ui.Stepper('r_near', "Estar cerca", lo=0, hi=1000, step=50, fmt="+{}",
@@ -337,7 +340,7 @@ def sections_for(kind):
     if kind == 'futbol':
         see = ['num_sensors', 'sensor_spread', 'sensor_range', 'use_speed', 'see_mates', 'see_rivals', 'use_role']
         evo = ['population', 'elite_pct', 'mutation_rate', 'mutation_strength', 'crossover']
-        score = ['r_goal', 'p_conceded', 'p_own_goal', 'r_touch', 'r_advance', 'r_near', 'p_crowd', 'p_idle']
+        score = ['r_goal', 'p_conceded', 'p_own_goal', 'r_touch', 'r_kick', 'r_advance', 'r_near', 'p_crowd', 'p_idle']
     else:
         see = ['num_sensors', 'sensor_spread', 'sensor_range', 'use_speed', 'use_compass']
         evo = ['population', 'elite_pct', 'mutation_rate', 'mutation_strength', 'crossover', 'max_steps', 'patience']
@@ -822,7 +825,7 @@ def curriculum_settings(screen, opts):
 # ---------------------------------------------------------------------- #
 # Fútbol: opciones del partido
 # ---------------------------------------------------------------------- #
-from ai.football import OPPONENTS, FootballScenario, TEAM_COLORS  # noqa: E402
+from ai.football import OPPONENTS, BALL_CONTROLS, FootballScenario, TEAM_COLORS  # noqa: E402
 
 FOOTBALL_STEPPERS = [
     ui.Stepper('team_size', "Jugadores por equipo", options=[(n, str(n)) for n in range(1, 7)],
@@ -831,6 +834,9 @@ FOOTBALL_STEPPERS = [
     ui.Stepper('opponent', "Rival", options=OPPONENTS,
                help_text="Sin rival: practican goles (lo más fácil para empezar). Bot: un auto programado que "
                          "va a la pelota. Entre ellos: los cerebros juegan partidos entre sí."),
+    ui.Stepper('ball_control', "Control de pelota", options=BALL_CONTROLS,
+               help_text="Pegada: al tocarla de frente queda pegada al auto hasta que patea, choca contra la pared "
+                         "o se la toca un rival (más fácil de aprender). Libre: la pelota se mueve solo con la física."),
     ui.Stepper('match_steps', "Duración del partido",
                options=[(900, "15 s"), (1200, "20 s"), (1800, "30 s"), (2700, "45 s"), (3600, "1 min")],
                help_text="Tiempo de cada partido (en tiempo de juego, a velocidad x1). Cada generación es un partido."),
@@ -861,7 +867,7 @@ def football_settings(screen, opts, field):
                 if event.key == pygame.K_ESCAPE:
                     return 'back', None
                 if event.key == pygame.K_RETURN:
-                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'])
+                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'], opts['ball_control'])
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 for st in FOOTBALL_STEPPERS:
                     new = st.click(event.pos, opts[st.key])
@@ -874,7 +880,7 @@ def football_settings(screen, opts, field):
                 if back.collidepoint(event.pos):
                     return 'back', None
                 if go.collidepoint(event.pos):
-                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'])
+                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'], opts['ball_control'])
 
         key = (id(field), area.size)
         if key != cache_key:
@@ -898,8 +904,9 @@ def football_settings(screen, opts, field):
                 hover = st
         ui.button(screen, fonts.small, "Elegir cancha del editor", pick)
         ui.button(screen, fonts.small, "Usar la clásica", classic, enabled=bool(field.file))
-        tip = hover.help if hover else ("Consejo: entrená primero sin rival hasta que metan goles, y después "
-                                        "seguí entrenando el mismo perfil contra el bot.")
+        tip = hover.help if hover else ("Consejo: con la pelota pegada aprenden mucho más rápido. Entrená primero "
+                                        "sin rival hasta que metan goles y después seguí con el mismo perfil contra el "
+                                        "bot: ahí aprenden a patear, porque el rival les roba la pelota.")
         _wrap(screen, tip, fonts.small, ui.WHITE if hover else ui.TEXT_DIM,
               pygame.Rect(left.x, pick.bottom + 24, left.w, 140), 20)
 

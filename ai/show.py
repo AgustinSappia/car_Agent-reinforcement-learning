@@ -199,7 +199,7 @@ class ExpoScreen:
         W, H = self.layout()
         sc = self.scenario
         self.view = MapView(sc.field.background, pygame.Rect(15, self.top, W - 30, self.bottom - self.top))
-        self.sim = FootballSim(sc.field, self.cfg, 1, sc.team_size, True)
+        self.sim = FootballSim(sc.field, self.cfg, 1, sc.team_size, True, control=sc.ball_control)
         self.match_steps = max(sc.match_steps, 1800)
 
     # -------------------------------------------------------------- #
@@ -357,7 +357,7 @@ class RaceScreen:
         self.result_timer = 0
         if self.football:
             self.view = MapView(sc.field.background, area)
-            self.sim = FootballSim(sc.field, self.cfg, 1, sc.team_size, True)
+            self.sim = FootballSim(sc.field, self.cfg, 1, sc.team_size, True, control=sc.ball_control)
             self.player_car = 0
             self.match_steps = 3600
         else:

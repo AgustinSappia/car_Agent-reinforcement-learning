@@ -72,7 +72,8 @@ def inputs(cfg, kind=None):
 def action_name(a):
     steer, gas, brake, kick = a
     if kick:
-        return "Patear", "Acelera y, si la pelota está cerca y la patada está lista, le pega fuerte hacia adelante."
+        return "Patear", ("Acelera y, si tiene la pelota (o la tiene cerca y adelante) y la patada está lista, "
+                          "le pega fuerte hacia adelante.")
     turn = {-1: "a la izquierda", 1: "a la derecha"}.get(int(steer))
     if brake:
         return "Frenar", "Frena: baja la velocidad rápido."
@@ -99,6 +100,7 @@ def fitness_lines(cfg, kind=None):
             ("Gol en contra", f"-{cfg.p_conceded}"),
             ("Gol en propio arco (extra)", f"-{cfg.p_own_goal}"),
             ("Toque a la pelota (máx. 30)", f"+{cfg.r_touch}"),
+            ("Patada hacia el arco (máx. 15)", f"+{cfg.r_kick}"),
             ("Acercar la pelota al arco (px)", f"+{cfg.r_advance:g}"),
             ("Cerca de la pelota (siempre)", f"hasta +{cfg.r_near}"),
             ("Amontonarse (siempre)", f"hasta -{cfg.p_crowd}"),

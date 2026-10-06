@@ -110,6 +110,7 @@ class AgentConfig:
     p_conceded: int = 600
     p_own_goal: int = 800          # además del gol en contra
     r_touch: int = 15
+    r_kick: int = 0                # patada que sale hacia el arco rival (no premia patear al aire)
     r_advance: float = 1.0         # por cada píxel que acerca la pelota al arco rival
     r_near: int = 200              # estar cerca de la pelota
     p_crowd: int = 300             # amontonarse con un compañero

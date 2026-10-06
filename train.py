@@ -121,7 +121,7 @@ def scenario_for_entry(screen, entry, other_map=False):
             if data and data.get('goals'):
                 field = Field(data)
         return screen, FootballScenario(field, meta.get('team_size', 1), meta.get('opponent', 'bot_normal'),
-                                        meta.get('match_steps', 1800))
+                                        meta.get('match_steps', 1800), meta.get('ball_control', 'libre'))
     data = None if other_map else load_map(meta.get('map_file', ''))
     if not data:
         screen, data = pick_from_selector('pista')
@@ -172,7 +172,7 @@ def main():
     screen = ui.open_window(CAPTION)
     maze_opts = {'size': 'chico', 'new_every': 0, 'braid': False}
     curriculum_opts = {'rule': 'dominar', 'every': 20, 'threshold': 50, 'tracks': []}
-    football_opts = {'team_size': 1, 'opponent': 'none', 'match_steps': 1200}
+    football_opts = {'team_size': 1, 'opponent': 'none', 'match_steps': 1200, 'ball_control': 'pegada'}
 
     while True:
         choice = main_menu(screen)
