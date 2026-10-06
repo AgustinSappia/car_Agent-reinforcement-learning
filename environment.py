@@ -1,7 +1,7 @@
 # environment.py
 """
 Environment corregido y robusto para integrarse con:
-- track_editor_v2.py (editor)
+- track_editor_v3.py (editor)
 - train_genetic.py (trainer genético)
 
 Mejoras:

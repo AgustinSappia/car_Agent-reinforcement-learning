@@ -1,0 +1,106 @@
+"""
+Galería de campeones: cerebros entrenados guardados para mostrarlos después
+(modo Expo, competir contra la IA) sin tener que entrenar en vivo.
+
+Hay dos tipos de entradas:
+- Campeones guardados a mano (botón "A la galería" en el entrenamiento): agentes/galeria/
+- El último cerebro de cada perfil (se guarda solo al entrenar): agentes/<tipo>/<perfil>.npz
+"""
+
+import colorsys
+import os
+import random
+import shutil
+from datetime import datetime
+
+from ai.brain import read_brain, write_brain
+from ai.config import AgentConfig, PROFILES_DIR, KINDS, KIND_LABELS
+
+GALLERY_DIR = os.path.join(PROFILES_DIR, 'galeria')
+
+
+def save_champion(path, novice_path=None, name=None):
+    """Copia un cerebro a la galería. Devuelve el nombre que se le puso."""
+    data = read_brain(path)
+    if data is None:
+        return None
+    os.makedirs(GALLERY_DIR, exist_ok=True)
+    meta = dict(data['meta'])
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    meta['name'] = name or f"{KIND_LABELS.get(meta.get('kind'), '')} · {meta.get('map', '')} · gen {meta.get('generation', '?')}"
+    meta['saved'] = stamp
+    base = os.path.join(GALLERY_DIR, f"campeon_{stamp}")
+    write_brain(base + ".npz", data['sizes'], data['W'], data['b'], meta)
+    if novice_path and os.path.exists(novice_path):
+        shutil.copyfile(novice_path, base + "_gen1.npz")
+    return meta['name']
+
+
+def _entry(path, gallery):
+    data = read_brain(path)
+    if data is None or not data['meta'].get('kind'):
+        return None
+    meta = data['meta']
+    novice = path[:-4] + "_gen1.npz"
+    try:
+        cfg = AgentConfig.from_dict(meta.get('config', {}))
+        cfg.kind = meta['kind']
+        if 'use_role' not in meta.get('config', {}):
+            cfg.use_role = False        # antes no existía esa entrada
+        if 'color' not in meta.get('config', {}):
+            # Cerebros guardados antes de que los agentes tuvieran color: uno fijo según el archivo
+            rng = random.Random(os.path.basename(path))
+            cfg.color = [int(255 * c) for c in colorsys.hsv_to_rgb(rng.random(), 0.7, 0.95)]
+    except Exception:
+        return None
+    if cfg.layer_sizes(meta['kind']) != data['sizes']:
+        return None
+    if gallery:
+        name = meta.get('name', os.path.basename(path))
+    else:
+        name = f"Perfil {meta.get('profile', '?')} · {KIND_LABELS.get(meta['kind'], meta['kind'])}"
+    return {
+        'path': path, 'gallery': gallery, 'name': name, 'kind': meta['kind'], 'meta': meta,
+        'cfg': cfg, 'sizes': data['sizes'], 'brain': data,
+        'novice': read_brain(novice) if os.path.exists(novice) else None,
+        'mtime': os.path.getmtime(path),
+    }
+
+
+def list_entries():
+    """Campeones de la galería primero (más nuevos arriba), después los últimos de cada perfil"""
+    entries = []
+    if os.path.isdir(GALLERY_DIR):
+        for f in os.listdir(GALLERY_DIR):
+            if f.endswith('.npz') and not f.endswith('_gen1.npz'):
+                e = _entry(os.path.join(GALLERY_DIR, f), True)
+                if e:
+                    entries.append(e)
+    profile_entries = []
+    # agentes/ solo: cerebros de versiones anteriores, cuando los perfiles no estaban separados por tipo
+    for folder in [os.path.join(PROFILES_DIR, kind) for kind in KINDS] + [PROFILES_DIR]:
+        if not os.path.isdir(folder):
+            continue
+        for f in os.listdir(folder):
+            if f.endswith('.npz') and not f.endswith('_gen1.npz'):
+                e = _entry(os.path.join(folder, f), False)
+                if e:
+                    profile_entries.append(e)
+    entries.sort(key=lambda e: -e['mtime'])
+    profile_entries.sort(key=lambda e: -e['mtime'])
+    return entries + profile_entries
+
+
+def delete_entry(entry):
+    """Solo se borran campeones de la galería"""
+    if not entry['gallery']:
+        return False
+    for p in (entry['path'], entry['path'][:-4] + "_gen1.npz"):
+        if os.path.exists(p):
+            os.remove(p)
+    return True
+
+
+def promote(entry):
+    """Pasa el último cerebro de un perfil a la galería"""
+    return save_champion(entry['path'], entry['path'][:-4] + "_gen1.npz")

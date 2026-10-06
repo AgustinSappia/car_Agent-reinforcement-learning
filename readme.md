@@ -48,3 +48,27 @@ Cruzar sin checkpoints: -50 puntos
 Dirección incorrecta: -100 puntos
 Colisión: -200 puntos
 Zonas: ±0.3-0.5 (pequeño bonus/malus)
+
+## Entrenamiento genético (nuevo)
+
+`python train.py` (o `python train_genetic2.py`, que es un atajo).
+
+**Entrenar**
+1. **Recorrer una pista**: una pista del editor, pasando los checkpoints en orden.
+2. **Varias pistas**: el mismo cerebro aprende una lista de pistas, pasando a la siguiente cuando la domina.
+3. **Resolver un laberinto**: laberintos al azar (pueden cambiar cada N generaciones).
+4. **Jugar al fútbol**: pelota con física, patada, arcos y equipos de 1 a 3, contra un bot, entre ellos o sin rival.
+   Las canchas se hacen en el editor (herramientas Arco azul, Arco rojo y Pelota, o la plantilla Cancha).
+
+Antes de entrenar se pasa por el **taller del agente**: qué ve, cómo piensa, cómo maneja y cómo evoluciona
+(se guarda como perfil en `agentes/`). Durante el entrenamiento: velocidades x1 a Turbo, gráfico de fitness,
+la red del líder en vivo, **R** para ver la repetición del mejor de la generación y **G** para guardarlo en la galería.
+
+**Mostrar**
+5. **Modo Expo**: pantalla dividida, un auto típico de la generación 1 contra el campeón (en fútbol, un partido).
+6. **Competí contra la IA**: manejás con las flechas contra un cerebro entrenado (en fútbol, Espacio patea).
+7. **Galería de campeones**: los cerebros guardados y el último de cada perfil.
+
+El código está en `ai/`: `config.py` (perfil), `brain.py` (redes de toda la población en numpy),
+`world.py` (física y sensores vectorizados), `scenarios.py` (pista, varias pistas, laberinto), `football.py`
+y `football_trainer.py` (fútbol), `trainer.py`, `hall.py` (galería), `show.py` (Expo y carrera), `menus.py`.

@@ -74,6 +74,12 @@ def load_track_data(track_name):
         speed_zone_layer = load_optional_layer("speed")
         slow_zone_layer = load_optional_layer("slow")
 
+        # --- Cancha de fútbol (opcional) ---
+        # goals: {"azul": (x1, y1, x2, y2), "rojo": (...)}; "azul" es el arco que defiende el equipo azul
+        goals = metadata.get("goals")
+        goals = {side: tuple(rect) for side, rect in goals.items() if rect} if goals else None
+        ball_spawn = tuple(metadata["ball_spawn"]) if metadata.get("ball_spawn") else None
+
         # --- Armar diccionario final ---
         track_data = {
             "name": track_base,
@@ -86,6 +92,9 @@ def load_track_data(track_name):
             "finish_line": tuple(metadata.get("finish_line", [])) if metadata.get("finish_line") else None,
             "checkpoints": [tuple(cp) for cp in metadata.get("checkpoints", [])],
             "required_laps": int(metadata.get("required_laps", 1)),
+            "goals": goals or None,
+            "ball_spawn": ball_spawn,
+            "is_field": bool(goals) and "azul" in goals and "rojo" in goals,
             "width": track_width,
             "height": track_height,
             "metadata": metadata,
@@ -99,6 +108,9 @@ def load_track_data(track_name):
         print(f"  - Meta: {'Sí' if track_data['finish_line'] else 'No'}")
         print(f"  - Zonas rápidas: {'Sí' if speed_zone_layer else 'No'}")
         print(f"  - Zonas lentas: {'Sí' if slow_zone_layer else 'No'}")
+        print(f"  - Arcos: {', '.join(sorted(goals)) if goals else 'No'}"
+              f"{' (cancha)' if track_data['is_field'] else ''}")
+        print(f"  - Pelota: {ball_spawn if ball_spawn else 'No'}")
 
         return track_data
 
