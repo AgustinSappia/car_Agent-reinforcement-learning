@@ -173,8 +173,11 @@ class FootballSim:
     del equipo (c % PPM) // team_size. PPM = jugadores por partido.
     """
 
-    def __init__(self, field, cfg, n_matches, team_size, two_teams=True, rng=None, control='libre'):
+    def __init__(self, field, cfg, n_matches, team_size, two_teams=True, rng=None, control='libre',
+                 random_starts=0.0):
         self.field = field
+        # Fracción de saques con la pelota y los autos en lugares al azar (solo para entrenar)
+        self.random_starts = random_starts
         # 'pegada': al tocar la pelota de frente queda pegada al auto hasta que patea, choca o se la roba un rival
         self.sticky = control == 'pegada'
         self.cfg = cfg
@@ -221,6 +224,7 @@ class FootballSim:
         self.idle = np.zeros((M, 2), dtype=np.float32)        # pasos quietos (promedio del equipo)
         self.steps = 0
         self.last_goal = np.full(M, -1000, dtype=np.int32)
+        self.d0 = np.zeros((M, 2), dtype=np.float32)
         self.kickoff(np.arange(M))
 
     def kickoff(self, matches):
@@ -238,8 +242,43 @@ class FootballSim:
                 n = len(cars)
                 self.world.place(cars, x + self.rng.uniform(-8, 8, n), y + self.rng.uniform(-8, 8, n),
                                  a + self.rng.uniform(-0.2, 0.2, n))
+        if self.random_starts > 0:
+            self._random_kickoff(matches[self.rng.random(len(matches)) < self.random_starts])
         self.cooldown[np.isin(self.match_of, matches)] = 0
-        self.d0 = np.hypot(self.field.ball_spawn[0] - self.goal_c[:, 0], self.field.ball_spawn[1] - self.goal_c[:, 1])
+        # Distancia de la pelota a cada arco al sacar, para medir cuánto la acercan
+        for g in range(2):
+            self.d0[matches, g] = np.hypot(self.bx[matches] - self.goal_c[g, 0], self.by[matches] - self.goal_c[g, 1])
+
+    def _random_spots(self, n, margin=45):
+        """n puntos al azar dentro de la cancha, lejos de las paredes"""
+        W, H = self.field.size
+        out = np.zeros((n, 2), dtype=np.float32)
+        todo = np.arange(n)
+        for _ in range(50):
+            if not len(todo):
+                break
+            x = self.rng.uniform(0, W, len(todo)).astype(np.float32)
+            y = self.rng.uniform(0, H, len(todo)).astype(np.float32)
+            ok = self.world.on_road(x, y)
+            for dx, dy in ((margin, 0), (-margin, 0), (0, margin), (0, -margin)):
+                ok &= self.world.on_road(x + dx, y + dy)
+            for x1, y1, x2, y2 in self.goal_r:   # ni adentro ni pegado a un arco
+                ok &= ~((x > x1 - 120) & (x < x2 + 120) & (y > y1 - 60) & (y < y2 + 60))
+            out[todo[ok], 0], out[todo[ok], 1] = x[ok], y[ok]
+            todo = todo[~ok]
+        out[todo] = self.field.ball_spawn
+        return out
+
+    def _random_kickoff(self, matches):
+        """Saque distinto: la pelota y los autos en lugares y direcciones al azar. Así el cerebro no puede
+        memorizar una jugada desde el saque y tiene que aprender a usar lo que ve (dónde está cada arco)."""
+        if len(matches) == 0:
+            return
+        ball = self._random_spots(len(matches))
+        self.bx[matches], self.by[matches] = ball[:, 0], ball[:, 1]
+        cars = np.flatnonzero(np.isin(self.match_of, matches))
+        spots = self._random_spots(len(cars))
+        self.world.place(cars, spots[:, 0], spots[:, 1], self.rng.uniform(-math.pi, math.pi, len(cars)).astype(np.float32))
 
     def opp_goal(self, cars):
         return self.goal_c[1 - self.team_of[cars]]
@@ -569,7 +608,7 @@ class FootballSim:
         for t in range(self.teams):
             target = self.goal_c[1 - t]
             d = np.hypot(self.bx - target[0], self.by - target[1])
-            self.advance[:, t] = np.maximum(self.advance[:, t], self.d0[1 - t] - d)
+            self.advance[:, t] = np.maximum(self.advance[:, t], self.d0[:, 1 - t] - d)
             cars = (np.arange(self.M)[:, None] * self.PPM + t * self.N + np.arange(self.N)[None, :])
             dist = np.hypot(self.world.x[cars] - self.bx[:, None], self.world.y[cars] - self.by[:, None]).min(axis=1)
             self.near[:, t] += 1 - np.minimum(dist / 800, 1)
@@ -631,8 +670,10 @@ class FootballScenario:
     title = 'Fútbol'
     goal_text = "Meter la pelota en el arco rival"
 
-    def __init__(self, field, team_size=1, opponent='bot_normal', match_steps=1500, ball_control='libre'):
+    def __init__(self, field, team_size=1, opponent='bot_normal', match_steps=1500, ball_control='libre',
+                 random_starts=0.0):
         self.field = field
+        self.random_starts = random_starts
         self.ball_control = ball_control
         self.team_size = team_size
         self.opponent = opponent
@@ -663,14 +704,17 @@ class FootballScenario:
 
     def status(self):
         control = self.ball_control
-        return [f"Rival: {self.opponent_label()}  ·  {self.team_size} por equipo", f"Cancha: {self.field.name}  ·  pelota {control}"]
+        starts = f"  ·  azar {self.random_starts:.0%}" if self.random_starts else ""
+        return [f"Rival: {self.opponent_label()}  ·  {self.team_size} por equipo{starts}",
+                f"Cancha: {self.field.name}  ·  pelota {control}"]
 
     def draw_overlay(self, surf, to_screen, scale, font):
         pass
 
     def map_info(self):
         return {'map': self.field.name, 'map_file': self.field.file, 'team_size': self.team_size,
-                'opponent': self.opponent, 'match_steps': self.match_steps, 'ball_control': self.ball_control}
+                'opponent': self.opponent, 'match_steps': self.match_steps, 'ball_control': self.ball_control,
+                'random_starts': self.random_starts}
 
 
 # ---------------------------------------------------------------------- #

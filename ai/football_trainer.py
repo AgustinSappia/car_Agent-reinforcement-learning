@@ -71,7 +71,7 @@ class FootballTrainer(Trainer):
                 team_brain = np.concatenate([team_brain, np.full((len(team_brain), 1), -1)], axis=1)
         self.team_brain = team_brain
         self.sim = FootballSim(sc.field, self.cfg, len(team_brain), sc.team_size, two, self.rng,
-                               sc.ball_control)
+                               sc.ball_control, sc.random_starts)
         self.world = self.sim.world
         car_brain = team_brain[self.sim.match_of, self.sim.team_of]
         self.brain_cars = np.flatnonzero(car_brain >= 0)

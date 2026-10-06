@@ -840,6 +840,9 @@ FOOTBALL_STEPPERS = [
     ui.Stepper('ball_control', "Control de pelota", options=BALL_CONTROLS,
                help_text="Pegada: al tocarla de frente queda pegada al auto hasta que patea, choca contra la pared "
                          "o se la toca un rival (más fácil de aprender). Libre: la pelota se mueve solo con la física."),
+    ui.Stepper('random_starts', "Saques al azar", options=[(0.0, "No"), (0.5, "La mitad"), (1.0, "Todos")],
+               help_text="Algunos partidos empiezan con la pelota y los autos en lugares al azar. Así no se "
+                         "aprenden de memoria un solo saque y miran de verdad hacia qué arco van. La mitad anda mejor."),
     ui.Stepper('match_steps', "Duración del partido",
                options=[(900, "15 s"), (1200, "20 s"), (1800, "30 s"), (2700, "45 s"), (3600, "1 min")],
                help_text="Tiempo de cada partido (en tiempo de juego, a velocidad x1). Cada generación es un partido."),
@@ -870,7 +873,8 @@ def football_settings(screen, opts, field):
                 if event.key == pygame.K_ESCAPE:
                     return 'back', None
                 if event.key == pygame.K_RETURN:
-                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'], opts['ball_control'])
+                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'],
+                                                 opts['ball_control'], opts.get('random_starts', 0.0))
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 for st in FOOTBALL_STEPPERS:
                     new = st.click(event.pos, opts[st.key])
@@ -883,7 +887,8 @@ def football_settings(screen, opts, field):
                 if back.collidepoint(event.pos):
                     return 'back', None
                 if go.collidepoint(event.pos):
-                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'], opts['ball_control'])
+                    return 'go', FootballScenario(field, opts['team_size'], opts['opponent'], opts['match_steps'],
+                                                 opts['ball_control'], opts.get('random_starts', 0.0))
 
         key = (id(field), area.size)
         if key != cache_key:
