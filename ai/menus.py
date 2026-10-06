@@ -271,7 +271,8 @@ STEPPERS = {st.key: st for st in [
                help_text="Le pasa su propia velocidad a la red. Ayuda a frenar antes de las curvas."),
     ui.Stepper('use_compass', "Brújula al objetivo",
                help_text="Le dice hacia dónde queda el próximo checkpoint o la salida (en línea recta, sin saber "
-                         "de paredes). Sin brújula tiene que aprender solo con los sensores."),
+                         "de paredes). En el laberinto conviene sacarla: sin brújula aprenden a seguir una pared y "
+                         "encuentran la salida de laberintos que nunca vieron."),
     ui.Stepper('see_mates', "Ve a su compañero",
                help_text="Le pasa dónde está el compañero más cercano (3 entradas). Ayuda a no amontonarse."),
     ui.Stepper('see_rivals', "Ve al rival",
@@ -307,13 +308,18 @@ STEPPERS = {st.key: st for st in [
     ui.Stepper('max_steps', "Pasos por gen.", lo=500, hi=10000, step=250,
                help_text="Tiempo máximo de cada generación."),
     ui.Stepper('patience', "Paciencia", lo=50, hi=1500, step=50,
-               help_text="Pasos sin avanzar permitidos. Si un auto no avanza en tantos pasos, queda afuera (evita autos dando vueltas en el lugar)."),
+               help_text="Pasos sin avanzar permitidos. Si un auto no avanza en tantos pasos, queda afuera (evita autos dando "
+                         "vueltas en el lugar). En el laberinto, descubrir un pasillo nuevo también cuenta como avanzar."),
+    ui.Stepper('bounce', "Rebota al chocar",
+               help_text="Sí: al chocar vuelve atrás, frena y sigue, así puede aprender a darse vuelta cuando entra en "
+                         "un callejón sin salida. No: el auto que choca queda afuera en esa generación."),
     # Puntaje de pista y laberinto
     ui.Stepper('r_fast', "Premio por rapidez", lo=0.0, hi=10.0, step=0.5, fmt="{:.1f}",
                help_text="Al llegar, suma estos puntos por cada paso que le sobró. Más alto = premia más llegar rápido "
                          "que llegar seguro."),
     ui.Stepper('p_crash', "Castigo por chocar", lo=0, hi=2000, step=100,
-               help_text="Puntos que pierde el auto que choca. En 0 el choque solo lo frena (deja de sumar)."),
+               help_text="Puntos que pierde el auto que choca (si rebota, por cada choque). En 0 el choque solo "
+                         "lo deja afuera o lo frena."),
     # Puntaje de fútbol
     ui.Stepper('r_goal', "Gol a favor", lo=0, hi=3000, step=100, fmt="+{}",
                help_text="Puntos por cada gol que mete el equipo."),
@@ -346,7 +352,8 @@ def sections_for(kind):
         score = ['r_goal', 'p_conceded', 'p_own_goal', 'r_touch', 'r_kick', 'r_advance', 'r_near', 'p_crowd', 'p_idle']
     else:
         see = ['num_sensors', 'sensor_spread', 'sensor_range', 'use_speed', 'use_compass']
-        evo = ['population', 'elite_pct', 'mutation_rate', 'mutation_strength', 'crossover', 'max_steps', 'patience']
+        evo = ['population', 'elite_pct', 'mutation_rate', 'mutation_strength', 'crossover', 'max_steps', 'patience',
+               'bounce']
         score = ['r_fast', 'p_crash']
     return [
         (0, "QUÉ VE", see),
@@ -649,10 +656,10 @@ PRESET_HELP = {
     ('pista', "Rápido de entrenar"): "3 sensores, red chica y siempre acelera: aprende en pocas generaciones, ideal para mostrar en vivo.",
     ('pista', "Explorador"): "80 autos con mutaciones grandes: prueba muchas ideas distintas. Bueno para pistas difíciles.",
     ('pista', "Preciso"): "9 sensores, red grande y puede frenar: maneja más fino, pero tarda más en aprender.",
-    ('laberinto', "Explorador"): "7 sensores a 180°, gira más fuerte y tiene más paciencia para los callejones.",
+    ('laberinto', "Sigue paredes"): "Sin brújula: aprende a seguir una pared hasta la salida. Es el que mejor resuelve laberintos nuevos.",
+    ('laberinto', "Explorador"): "Con brújula a la salida, 7 sensores a 180° y gira más fuerte. Puede meterse en callejones que apuntan a la salida.",
     ('laberinto', "Rápido de entrenar"): "Red chica y siempre acelera. Para laberintos chicos.",
     ('laberinto', "Generalista"): "9 sensores a 270° y red grande: pensado para 'laberinto nuevo cada N generaciones'.",
-    ('laberinto', "Sin brújula"): "No sabe dónde está la salida: tiene que encontrarla solo con los sensores. Más difícil.",
     ('futbol', "Goleador"): "Los puntajes de siempre: premia goles, toques y llevar la pelota al arco.",
     ('futbol', "Equipo ordenado"): "Castiga mucho amontonarse y premia menos estar cerca de la pelota: para equipos de 2 o más.",
     ('futbol', "Defensor"): "Castiga el doble los goles en contra: aprende a cuidar su arco antes de atacar.",

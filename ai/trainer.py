@@ -108,6 +108,7 @@ class Trainer:
         self.rec[0] = np.stack([self.world.x, self.world.y, self.world.angle], axis=1)
         self.death_step = np.full(P, self.cfg.max_steps, dtype=np.int32)
         self.crashed = np.zeros(P, dtype=bool)
+        self.bumps = np.zeros(P, dtype=np.int32)
         self.step_count = 0
         self.reasons = {'choque': 0, 'llegó': 0, 'sin progreso': 0, 'tiempo': 0}
 
@@ -126,6 +127,13 @@ class Trainer:
         actions = self.brain.forward(obs, idx)
         prev_x, prev_y = w.x[idx].copy(), w.y[idx].copy()
         crashed = w.step(idx, actions)
+        if self.cfg.bounce and crashed.any():
+            # Rebota: vuelve a donde estaba, frena y sigue en carrera (puede aprender a darse vuelta)
+            hit = idx[crashed]
+            w.x[hit], w.y[hit] = prev_x[crashed], prev_y[crashed]
+            w.speed[hit] = 0
+            self.bumps[hit] += 1
+            crashed = np.zeros_like(crashed)
         done = sc.update(w, idx, prev_x, prev_y, self.step_count)
         stalled = (self.step_count - sc.last_improve[idx]) > self.cfg.patience
         dead = crashed | done | stalled
@@ -142,7 +150,7 @@ class Trainer:
         return True
 
     def end_generation(self):
-        fit = self.scenario.fitness(self.cfg) - self.crashed * self.cfg.p_crash
+        fit = self.scenario.fitness(self.cfg) - (self.crashed + self.bumps) * self.cfg.p_crash
         best_i = int(np.argmax(fit))
         reached = int((self.scenario.finished_step >= 0).sum())
         self.history.append((float(fit[best_i]), float(fit.mean()), reached))
@@ -158,6 +166,8 @@ class Trainer:
             self.save_best(typical, float(fit[typical]), suffix='_gen1')
         self.store_replay(best_i, float(fit[best_i]))
         self.last_reason = dict(self.reasons)
+        if self.cfg.bounce:
+            self.last_reason['rebotaron'] = int((self.bumps > 0).sum())
         self.brain.evolve(fit, self.cfg.elite_pct, self.cfg.mutation_rate,
                           self.cfg.mutation_strength, self.cfg.crossover)
         self.generation += 1
@@ -335,8 +345,8 @@ class Trainer:
         if not self.last_reason:
             return ""
         r = self.last_reason
-        return (f"Gen. anterior: {r['llegó']} llegaron, {r['choque']} chocaron, "
-                f"{r['sin progreso'] + r['tiempo']} sin avanzar")
+        crashes = f"{r['rebotaron']} rebotaron" if 'rebotaron' in r else f"{r['choque']} chocaron"
+        return f"Gen. anterior: {r['llegó']} llegaron, {crashes}, {r['sin progreso'] + r['tiempo']} sin avanzar"
 
     def leader_text(self, leader):
         return self.scenario.leader_text(leader)

@@ -104,7 +104,8 @@ class AgentConfig:
 
     # Puntaje de pista y laberinto
     r_fast: float = 2.0            # premio por cada paso que sobra al llegar
-    p_crash: int = 0               # castigo por chocar
+    p_crash: int = 0               # castigo por chocar (si rebota: por cada choque)
+    bounce: bool = False           # pista/laberinto: al chocar rebota y sigue en vez de quedar afuera
 
     # Puntaje de fútbol
     r_goal: int = 1000
@@ -202,14 +203,16 @@ PRESETS = {
                         action_set='completo', population=60, max_steps=4000),
     },
     'laberinto': {
+        # Sin brújula aprende a seguir una pared (como la regla de la mano derecha) y resuelve laberintos nuevos;
+        # con brújula tiende a meterse en los callejones que apuntan a la salida
+        "Sigue paredes": dict(num_sensors=7, sensor_spread=180, sensor_range=300, turn_speed=0.15, max_speed=4.0,
+                              use_compass=False, patience=400, max_steps=4000, bounce=True),
         "Explorador": dict(num_sensors=7, sensor_spread=180, sensor_range=300, turn_speed=0.15, max_speed=4.0,
-                           patience=400, max_steps=3000),
+                           patience=400, max_steps=3000, bounce=True),
         "Rápido de entrenar": dict(num_sensors=5, sensor_spread=180, brain_size='chico', action_set='simple',
-                                   turn_speed=0.15, max_speed=4.0),
+                                   turn_speed=0.15, max_speed=4.0, bounce=True),
         "Generalista": dict(num_sensors=9, sensor_spread=270, sensor_range=300, brain_size='grande',
-                            turn_speed=0.15, max_speed=4.0, population=80, patience=500, max_steps=4000),
-        "Sin brújula": dict(num_sensors=7, sensor_spread=180, sensor_range=300, turn_speed=0.15, max_speed=4.0,
-                            use_compass=False, patience=400, max_steps=3000),
+                            turn_speed=0.15, max_speed=4.0, population=80, patience=500, max_steps=4000, bounce=True),
     },
     'futbol': {
         "Goleador": dict(num_sensors=5, sensor_spread=180),

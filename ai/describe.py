@@ -112,7 +112,7 @@ def fitness_lines(cfg, kind=None):
         out = [("Avance por la pista, contando vueltas", "+1 por píxel")]
     out.append(("Por cada paso que le sobró al llegar", f"+{cfg.r_fast:g}"))
     if cfg.p_crash:
-        out.append(("Chocar", f"-{cfg.p_crash}"))
+        out.append(("Cada choque" if cfg.bounce else "Chocar", f"-{cfg.p_crash}"))
     return out
 
 
@@ -135,6 +135,7 @@ def summary(cfg, kind=None):
         rows.append(("Partidos por cerebro", str(cfg.eval_matches)))
     else:
         rows.append(("Pasos / paciencia", f"{cfg.max_steps} / {cfg.patience}"))
+        rows.append(("Al chocar", "Rebota y sigue" if cfg.bounce else "Queda afuera"))
     return rows
 
 

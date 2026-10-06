@@ -340,6 +340,7 @@ class LaberintoScenario(Scenario):
 
     def __init__(self, size='mediano', new_every=0, braid=False, seed=None, W=1570, H=1080, maze_seed=None):
         self.size_name = size
+        self.explore = True
         self.new_every = new_every
         self.braid = braid
         self.W, self.H = W, H
@@ -394,6 +395,7 @@ class LaberintoScenario(Scenario):
         fx, fy = center(first)
         self.spawn = (sx, sy, math.atan2(fy - sy, fx - sx))
         self.goal = center(far)
+        self.cells = (ox, oy, cell, cols, rows)
         self.goal_radius = corridor * 0.45
 
         grid = _grid(self.road_mask)
@@ -421,6 +423,8 @@ class LaberintoScenario(Scenario):
             self.generate()
         super().start_generation(n, generation)
         self.reached = np.zeros(n, dtype=bool)
+        _, _, _, cols, rows = self.cells
+        self.visited = np.zeros((n, cols * rows), dtype=bool)
 
     def targets(self, idx):
         return np.full(len(idx), self.goal[0], dtype=np.float32), np.full(len(idx), self.goal[1], dtype=np.float32)
@@ -430,6 +434,15 @@ class LaberintoScenario(Scenario):
         d = self._cell_values(self.field, x, y)
         new = np.where(d >= 0, self.start_dist - d, self.progress[idx])
         self.mark_progress(idx, step, new)
+        if self.explore:
+            # Entrar a una celda que nunca visitó también cuenta como progreso: así no lo descartan
+            # mientras vuelve de un callejón sin salida para probar otro camino
+            ox, oy, cell, cols, rows = self.cells
+            c = (np.clip(((x - ox) // cell).astype(np.int32), 0, cols - 1) +
+                 cols * np.clip(((y - oy) // cell).astype(np.int32), 0, rows - 1))
+            fresh = ~self.visited[idx, c]
+            self.visited[idx, c] = True
+            self.last_improve[idx[fresh]] = step
         done = np.hypot(x - self.goal[0], y - self.goal[1]) < self.goal_radius
         if done.any():
             fin = idx[done]
