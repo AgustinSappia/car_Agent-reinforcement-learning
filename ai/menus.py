@@ -301,6 +301,9 @@ STEPPERS = {st.key: st for st in [
                help_text="Qué tan grande es cada cambio. Grande = explora más; chico = afina."),
     ui.Stepper('crossover', "Cruza entre padres",
                help_text="Los hijos mezclan neuronas de dos padres en vez de copiar a uno solo."),
+    ui.Stepper('eval_matches', "Partidos c/u", lo=1, hi=5, step=1,
+               help_text="Cuántos partidos juega cada cerebro por generación; su puntaje es el promedio. Más partidos = "
+                         "menos suerte en la elección de los mejores, pero cada generación tarda más."),
     ui.Stepper('max_steps', "Pasos por gen.", lo=500, hi=10000, step=250,
                help_text="Tiempo máximo de cada generación."),
     ui.Stepper('patience', "Paciencia", lo=50, hi=1500, step=50,
@@ -339,7 +342,7 @@ def sections_for(kind):
     """[(título, [claves])] de las opciones que tiene sentido tocar para cada tipo de agente"""
     if kind == 'futbol':
         see = ['num_sensors', 'sensor_spread', 'sensor_range', 'use_speed', 'see_mates', 'see_rivals', 'use_role']
-        evo = ['population', 'elite_pct', 'mutation_rate', 'mutation_strength', 'crossover']
+        evo = ['population', 'elite_pct', 'mutation_rate', 'mutation_strength', 'crossover', 'eval_matches']
         score = ['r_goal', 'p_conceded', 'p_own_goal', 'r_touch', 'r_kick', 'r_advance', 'r_near', 'p_crowd', 'p_idle']
     else:
         see = ['num_sensors', 'sensor_spread', 'sensor_range', 'use_speed', 'use_compass']

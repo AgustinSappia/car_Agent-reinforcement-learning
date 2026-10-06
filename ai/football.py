@@ -550,7 +550,7 @@ class FootballSim:
         if len(goal_m):
             team = scored[goal_m]
             if self.teams == 1:
-                team = np.where(team == 1, 0, -1)  # sin rival: en contra propia no suma a nadie
+                team = np.where(team == 0, 0, -1)  # sin rival: el gol en contra propia no suma a nadie
             ok = team >= 0
             self.score[goal_m[ok], team[ok]] += 1
             if self.teams == 1:
@@ -600,15 +600,26 @@ class FootballSim:
             'idle': self.idle[:, t] / steps,
         }
 
+    def team_parts(self, t):
+        """Puntos que aporta cada concepto al puntaje del equipo t (ya multiplicados por su peso)"""
+        c, p = self.cfg, self.team_breakdown(t)
+        return {
+            'goals': p['goals'] * c.r_goal,
+            'conceded': -p['conceded'] * c.p_conceded,
+            'own_goals': -p['own_goals'] * c.p_own_goal,
+            'touches': p['touches'] * c.r_touch,
+            'good_kicks': p['good_kicks'] * c.r_kick,
+            'advance': p['advance'] * c.r_advance,
+            'near': p['near'] * c.r_near,
+            'crowd': -p['crowd'] * c.p_crowd,
+            'idle': -p['idle'] * c.p_idle,
+        }
+
     def team_fitness(self):
         """(M, equipos) puntaje de cada equipo en su partido, con los pesos del agente"""
-        c = self.cfg
         fit = np.zeros((self.M, self.teams), dtype=np.float32)
         for t in range(self.teams):
-            p = self.team_breakdown(t)
-            fit[:, t] = (p['goals'] * c.r_goal - p['conceded'] * c.p_conceded - p['own_goals'] * c.p_own_goal
-                         + p['touches'] * c.r_touch + p['good_kicks'] * c.r_kick + p['advance'] * c.r_advance + p['near'] * c.r_near
-                         - p['crowd'] * c.p_crowd - p['idle'] * c.p_idle)
+            fit[:, t] = sum(self.team_parts(t).values())
         return fit
 
 

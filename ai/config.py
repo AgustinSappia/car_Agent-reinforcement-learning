@@ -100,6 +100,7 @@ class AgentConfig:
     crossover: bool = True
     max_steps: int = 2500          # pista/laberinto: pasos por generación
     patience: int = 250            # pista/laberinto: pasos sin progresar antes de descartar al auto
+    eval_matches: int = 1          # fútbol: partidos que juega cada cerebro por generación (se promedian)
 
     # Puntaje de pista y laberinto
     r_fast: float = 2.0            # premio por cada paso que sobra al llegar

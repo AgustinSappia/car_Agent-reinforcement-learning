@@ -131,7 +131,9 @@ def summary(cfg, kind=None):
         ("Mutación", f"prob. {cfg.mutation_rate:.2f}, fuerza {cfg.mutation_strength:.2f}"),
         ("Cruza entre padres", "Sí" if cfg.crossover else "No"),
     ]
-    if kind != 'futbol':
+    if kind == 'futbol':
+        rows.append(("Partidos por cerebro", str(cfg.eval_matches)))
+    else:
         rows.append(("Pasos / paciencia", f"{cfg.max_steps} / {cfg.patience}"))
     return rows
 
