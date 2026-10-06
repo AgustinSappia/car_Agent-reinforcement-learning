@@ -3,7 +3,7 @@ Autos que aprenden solos: entrenamiento con algoritmo genético y modos para mos
 
 Flujo:  menú principal
         - Entrenar: pista / varias pistas / laberinto / fútbol -> taller del agente -> entrenamiento
-        - Mostrar: modo Expo / competí contra la IA / galería de campeones
+        - Campeones: modo Expo (generación 1 contra el campeón) o jugar contra la IA
 
 Uso:  python train.py
 """
@@ -13,28 +13,32 @@ import os
 import pygame
 
 from ai import ui
-from ai.config import AgentConfig, PROFILES_DIR
+from ai.config import AgentConfig, PROFILES_DIR, default_config
 from ai.football import Field, FootballScenario
 from ai.menus import (main_menu, maze_settings, workshop, loading, curriculum_settings,
                       football_settings, gallery)
 from ai.scenarios import PistaScenario, LaberintoScenario, CurriculumScenario
 
 CAPTION = "Autos que aprenden - Entrenamiento genético"
-LAST_PROFILE = os.path.join(PROFILES_DIR, '_ultimo.txt')
 
 
-def last_profile():
+def _last_file(kind):
+    return os.path.join(PROFILES_DIR, kind, '_ultimo.txt')
+
+
+def last_profile(kind):
+    """Último perfil usado de ese tipo de agente (o uno nuevo con el primer preset)"""
     try:
-        with open(LAST_PROFILE) as f:
+        with open(_last_file(kind)) as f:
             name = f.read().strip()
-        return name, AgentConfig.load(name)
+        return name, AgentConfig.load(kind, name)
     except Exception:
-        return 'perfil', AgentConfig()
+        return 'perfil', default_config(kind)
 
 
-def remember_profile(name):
-    os.makedirs(PROFILES_DIR, exist_ok=True)
-    with open(LAST_PROFILE, 'w') as f:
+def remember_profile(kind, name):
+    os.makedirs(os.path.join(PROFILES_DIR, kind), exist_ok=True)
+    with open(_last_file(kind), 'w') as f:
         f.write(name)
 
 
@@ -128,44 +132,44 @@ def scenario_for_entry(screen, entry, other_map=False):
 
 
 # ---------------------------------------------------------------------- #
-def train_loop(screen, scenario, cfg, profile):
-    """Taller <-> entrenamiento. Devuelve (cfg, perfil, salir)"""
+def train_loop(screen, scenario):
+    """Taller <-> entrenamiento. Devuelve True si hay que salir del programa."""
     from ai.trainer import Trainer
     from ai.football_trainer import FootballTrainer
+    profile, cfg = last_profile(scenario.key)
     while True:
         action, cfg, profile = workshop(screen, scenario, cfg, profile)
-        if action == 'quit':
-            return cfg, profile, True
-        if action == 'back':
-            return cfg, profile, False
-        remember_profile(profile)
-        loading(screen, "Preparando el entrenamiento...")
-        cls = FootballTrainer if scenario.key == 'futbol' else Trainer
-        trainer = cls(screen, scenario, cfg, profile, load_brain=(action == 'continue'))
-        if trainer.run() == 'quit':
-            return cfg, profile, True
-
-
-def show_loop(screen, mode):
-    """Galería -> modo Expo o carrera. Devuelve True si hay que salir del programa."""
-    from ai.show import ExpoScreen, RaceScreen
-    while True:
-        action, entry = gallery(screen, mode)
         if action == 'quit':
             return True
         if action == 'back':
             return False
-        screen, scenario = scenario_for_entry(screen, entry, other_map=(action == 'otra'))
+        remember_profile(scenario.key, profile)
+        loading(screen, "Preparando el entrenamiento...")
+        cls = FootballTrainer if scenario.key == 'futbol' else Trainer
+        trainer = cls(screen, scenario, cfg, profile, load_brain=(action == 'continue'))
+        if trainer.run() == 'quit':
+            return True
+
+
+def show_loop(screen):
+    """Campeones -> modo Expo o jugar contra la IA. Devuelve True si hay que salir del programa."""
+    from ai.show import ExpoScreen, RaceScreen
+    while True:
+        action, entry, other_map = gallery(screen)
+        if action == 'quit':
+            return True
+        if action == 'back':
+            return False
+        screen, scenario = scenario_for_entry(screen, entry, other_map=other_map)
         if scenario is None:
             continue
-        cls = RaceScreen if action == 'competir' or (action == 'otra' and mode == 'competir') else ExpoScreen
+        cls = RaceScreen if action == 'competir' else ExpoScreen
         if cls(screen, scenario, entry).run() == 'quit':
             return True
 
 
 def main():
     screen = ui.open_window(CAPTION)
-    profile, cfg = last_profile()
     maze_opts = {'size': 'chico', 'new_every': 0, 'braid': False}
     curriculum_opts = {'rule': 'dominar', 'every': 20, 'threshold': 50, 'tracks': []}
     football_opts = {'team_size': 1, 'opponent': 'none', 'match_steps': 1200}
@@ -174,8 +178,8 @@ def main():
         choice = main_menu(screen)
         if choice == 'quit':
             break
-        if choice in ('expo', 'competir', 'galeria'):
-            if show_loop(screen, choice):
+        if choice == 'campeones':
+            if show_loop(screen):
                 break
             continue
         if choice == 'pista':
@@ -190,8 +194,7 @@ def main():
             break
         if scenario is None:
             continue
-        cfg, profile, leave = train_loop(screen, scenario, cfg, profile)
-        if leave:
+        if train_loop(screen, scenario):
             break
     pygame.quit()
 

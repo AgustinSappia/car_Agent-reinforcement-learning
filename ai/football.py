@@ -31,6 +31,8 @@ KICK_COOLDOWN = 25
 BALL_MAX_SPEED = 14.0
 BALL_FRICTION = 0.985
 WALL_BOUNCE = 0.75
+IDLE_SPEED = 0.3       # más lento que esto cuenta como quieto
+CROWD_DIST = 70        # dos compañeros más cerca que esto están amontonados
 
 GRASS = (46, 125, 60)
 GRASS_DARK = (40, 112, 54)
@@ -105,18 +107,26 @@ class Field:
         length = math.hypot(dx, dy) or 1
         ux, uy = dx / length, dy / length
         px, py = -uy, ux
+        # Hasta 3 jugadores: una línea. De 4 a 6: defensa (cerca del arco) y ataque
+        if count <= 3:
+            lines = [(count, 0.5 if count == 1 else 0.42)]
+        else:
+            front = count // 2
+            lines = [(count - front, 0.72), (front, 0.36)]
         spots = []
-        for k in range(count):
-            off = (k - (count - 1) / 2) * 110
-            frac = 0.5 if count == 1 else 0.42
-            x, y = gx + dx * (1 - frac) + px * off, gy + dy * (1 - frac) + py * off
+        for n_line, frac in lines:
+            for k in range(n_line):
+                off = (k - (n_line - 1) / 2) * 115
+                spots.append((gx + dx * (1 - frac) + px * off, gy + dy * (1 - frac) + py * off))
+        result = []
+        for x, y in spots:
             # Si cayó fuera de la cancha, acercarlo a la pelota
             for _ in range(40):
                 if self.on_road(x, y):
                     break
                 x, y = x + (bx - x) * 0.08, y + (by - y) * 0.08
-            spots.append((float(x), float(y), float(math.atan2(by - y, bx - x))))
-        return spots
+            result.append((float(x), float(y), float(math.atan2(by - y, bx - x))))
+        return result
 
     def _draw_background(self):
         W, H = self.road_mask.shape
@@ -176,6 +186,7 @@ class FootballSim:
         c = np.arange(self.C)
         self.match_of = c // self.PPM
         self.team_of = (c % self.PPM) // self.N
+        self.role = ((c % self.N) / max(1, self.N - 1)).astype(np.float32)   # 0 = primero, 1 = último
         self.spawns = [field.team_spawns(t, self.N) for t in range(2)]
         self.goal_c = field.goal_centers
         self.goal_r = np.array(field.goal_rects, dtype=np.float32)
@@ -197,6 +208,9 @@ class FootballSim:
         self.last_touch = np.full(M, -1, dtype=np.int32)
         self.advance = np.zeros((M, 2), dtype=np.float32)     # mejor avance de la pelota hacia cada arco rival
         self.near = np.zeros((M, 2), dtype=np.float32)        # suma de cercanía a la pelota
+        self.own_goals = np.zeros((M, 2), dtype=np.int32)     # goles en contra hechos por el propio equipo
+        self.crowd = np.zeros((M, 2), dtype=np.float32)       # pasos con compañeros pegados
+        self.idle = np.zeros((M, 2), dtype=np.float32)        # pasos quietos (promedio del equipo)
         self.steps = 0
         self.last_goal = np.full(M, -1000, dtype=np.int32)
         self.kickoff(np.arange(M))
@@ -264,10 +278,14 @@ class FootballSim:
         parts += self._rel(cars, og[:, 0], og[:, 1], 1500)
         mg = self.own_goal(cars)
         parts += self._rel(cars, mg[:, 0], mg[:, 1], 1500)[:2]
-        for same in (True, False):
+        for same, wanted in ((True, cfg.see_mates), (False, cfg.see_rivals)):
+            if not wanted:
+                continue
             nx, ny, found = self.nearest(cars, same)
             s, c, d = self._rel(cars, nx, ny, 1000)
             parts += [np.where(found, s, 0), np.where(found, c, 0), np.where(found, d, 1.5)]
+        if cfg.use_role:
+            parts.append(self.role[cars])
         parts.append((self.cooldown[cars] == 0).astype(np.float32))
         cols = [p if p.ndim == 2 else p[:, None] for p in parts]
         return np.concatenate(cols, axis=1).astype(np.float32)
@@ -289,10 +307,31 @@ class FootballSim:
         behind = (to_ball_x * ux + to_ball_y * uy) / dist_ball > 0.6
         tx = np.where(behind, bx, tx)
         ty = np.where(behind, by, ty)
+        # En equipos de 2 o más: solo el atacante más cercano va a la pelota, los otros atacantes
+        # acompañan un poco atrás y la mitad del equipo defiende entre la pelota y su arco.
+        # Cada uno se corre hacia un costado según su número, para no amontonarse.
+        if self.N > 1:
+            k = cars % self.N
+            lat = (k - (self.N - 1) / 2) * 75
+            perp_x, perp_y = -uy, ux
+            mg = self.own_goal(cars)
+            defender = k >= (self.N + 1) // 2
+            far = np.hypot(bx - mg[:, 0], by - mg[:, 1]) > 350
+            hold = defender & far
+            team_key = m * 2 + self.team_of[cars]
+            d = np.where(hold, np.inf, dist_ball)
+            nearest = np.full(self.M * 2, np.inf)
+            np.minimum.at(nearest, team_key, d)
+            support = ~hold & (d > nearest[team_key] + 1e-3)
+            tx = np.where(support, bx - ux * 140 + perp_x * lat, tx)
+            ty = np.where(support, by - uy * 140 + perp_y * lat, ty)
+            tx = np.where(hold, mg[:, 0] + (bx - mg[:, 0]) * 0.35 + perp_x * lat, tx)
+            ty = np.where(hold, mg[:, 1] + (by - mg[:, 1]) * 0.35 + perp_y * lat, ty)
         want = np.arctan2(ty - cy, tx - cx)
         diff = (want - w.angle[cars] + math.pi) % (2 * math.pi) - math.pi
         steer = np.where(np.abs(diff) > 0.1, np.sign(diff), 0).astype(np.float32)
         throttle = np.where(np.abs(diff) < 1.0, 1.0, 0.25).astype(np.float32)
+        throttle[np.hypot(tx - cx, ty - cy) < 24] = 0   # ya llegó a su lugar
         brake = np.zeros(len(cars), dtype=np.float32)
         facing_goal = np.cos(w.angle[cars]) * ux + np.sin(w.angle[cars]) * uy > 0.85
         kick = (behind & facing_goal & (dist_ball < KICK_RANGE + BALL_R)).astype(np.float32)
@@ -423,7 +462,9 @@ class FootballSim:
                 self.score[goal_m[~ok], 1] += 1
             scorer = self.last_touch[goal_m]
             good = (scorer >= 0)
-            self.goals_by[scorer[good]] += (self.team_of[scorer[good]] == scored[goal_m][good])
+            own = good & (self.team_of[np.maximum(scorer, 0)] != scored[goal_m])
+            self.goals_by[scorer[good & ~own]] += 1
+            np.add.at(self.own_goals, (goal_m[own], self.team_of[scorer[own]]), 1)
             self.last_goal[goal_m] = self.steps
             self.kickoff(goal_m)
         return goal_m
@@ -437,16 +478,41 @@ class FootballSim:
             cars = (np.arange(self.M)[:, None] * self.PPM + t * self.N + np.arange(self.N)[None, :])
             dist = np.hypot(self.world.x[cars] - self.bx[:, None], self.world.y[cars] - self.by[:, None]).min(axis=1)
             self.near[:, t] += 1 - np.minimum(dist / 800, 1)
+            # Quietos: autos casi sin velocidad
+            self.idle[:, t] += (self.world.speed[cars] < IDLE_SPEED).mean(axis=1)
+            # Amontonados: pares de compañeros a menos de CROWD_DIST
+            if self.N > 1:
+                X, Y = self.world.x[cars], self.world.y[cars]
+                close = 0
+                for i in range(self.N):
+                    for j in range(i + 1, self.N):
+                        close = close + (np.hypot(X[:, i] - X[:, j], Y[:, i] - Y[:, j]) < CROWD_DIST)
+                self.crowd[:, t] += close / (self.N * (self.N - 1) / 2)
+
+    def team_breakdown(self, t):
+        """Partes del puntaje del equipo t en cada partido (para el puntaje y para mostrarlo)"""
+        cars = (np.arange(self.M)[:, None] * self.PPM + t * self.N + np.arange(self.N)[None, :])
+        steps = max(1, self.steps)
+        return {
+            'goals': self.score[:, t].astype(np.float32),
+            'conceded': (self.score[:, 1 - t] if self.teams == 2 else self.score[:, 1]).astype(np.float32),
+            'own_goals': self.own_goals[:, t].astype(np.float32),
+            'touches': np.minimum(self.touches[cars].sum(axis=1), 30).astype(np.float32),
+            'advance': np.maximum(self.advance[:, t], 0),
+            'near': self.near[:, t] / steps,
+            'crowd': self.crowd[:, t] / steps,
+            'idle': self.idle[:, t] / steps,
+        }
 
     def team_fitness(self):
-        """(M, equipos) puntaje de cada equipo en su partido"""
+        """(M, equipos) puntaje de cada equipo en su partido, con los pesos del agente"""
+        c = self.cfg
         fit = np.zeros((self.M, self.teams), dtype=np.float32)
         for t in range(self.teams):
-            cars = (np.arange(self.M)[:, None] * self.PPM + t * self.N + np.arange(self.N)[None, :])
-            touches = np.minimum(self.touches[cars].sum(axis=1), 30)
-            against = self.score[:, 1 - t] if self.teams == 2 else self.score[:, 1]
-            fit[:, t] = (self.score[:, t] * 1000 - against * 600 + touches * 15
-                         + np.maximum(self.advance[:, t], 0) + 200 * self.near[:, t] / max(1, self.steps))
+            p = self.team_breakdown(t)
+            fit[:, t] = (p['goals'] * c.r_goal - p['conceded'] * c.p_conceded - p['own_goals'] * c.p_own_goal
+                         + p['touches'] * c.r_touch + p['advance'] * c.r_advance + p['near'] * c.r_near
+                         - p['crowd'] * c.p_crowd - p['idle'] * c.p_idle)
         return fit
 
 
@@ -501,28 +567,22 @@ class FootballScenario:
 # ---------------------------------------------------------------------- #
 # Dibujo
 # ---------------------------------------------------------------------- #
-def draw_match(surf, sim, match, to_screen, scale, labels=None, highlight=None):
-    """Dibuja los autos y la pelota de un partido"""
+def draw_match(surf, sim, match, to_screen, scale, labels=None, highlight=None, stripes=None):
+    """Dibuja los autos y la pelota de un partido. stripes: color de cada equipo en el techo (el del agente)"""
+    from ai.sprites import draw_car
     w = sim.world
-    L, Wd = 18 * scale, 10 * scale
+    font = pygame.font.Font(None, 22) if labels else None
     for k in range(sim.PPM):
         c = match * sim.PPM + k
         team = sim.team_of[c]
         cx, cy = to_screen((w.x[c], w.y[c]))
-        ang = float(w.angle[c])
-        ca, sa = math.cos(ang), math.sin(ang)
-        pts = [(cx + ca * dx - sa * dy, cy + sa * dx + ca * dy)
-               for dx, dy in ((L, Wd), (L, -Wd), (-L, -Wd), (-L, Wd))]
-        pygame.draw.polygon(surf, TEAM_COLORS[team], pts)
-        pygame.draw.polygon(surf, TEAM_LIGHT[team], pts, 2)
-        nose = (cx + ca * L, cy + sa * L)
-        pygame.draw.circle(surf, (255, 255, 255), (int(nose[0]), int(nose[1])), max(2, int(3 * scale)))
+        stripe = stripes[team] if stripes else None
+        draw_car(surf, (cx, cy), float(w.angle[c]), scale, TEAM_COLORS[team], stripe)
         if highlight is not None and c == highlight:
-            pygame.draw.circle(surf, (255, 205, 40), (int(cx), int(cy)), int(max(10, 26 * scale)), 2)
+            pygame.draw.circle(surf, (255, 205, 40), (int(cx), int(cy)), int(max(12, 28 * scale)), 2)
         if labels and c in labels:
-            font = pygame.font.Font(None, 22)
             t = font.render(labels[c], True, (255, 255, 255))
-            surf.blit(t, t.get_rect(midbottom=(cx, cy - 20 * scale)))
+            surf.blit(t, t.get_rect(midbottom=(cx, cy - 20 * max(scale, 0.6))))
     bx, by = to_screen((sim.bx[match], sim.by[match]))
     r = max(4, int(BALL_R * scale))
     pygame.draw.circle(surf, (250, 250, 250), (int(bx), int(by)), r)

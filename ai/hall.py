@@ -4,18 +4,19 @@ Galería de campeones: cerebros entrenados guardados para mostrarlos después
 
 Hay dos tipos de entradas:
 - Campeones guardados a mano (botón "A la galería" en el entrenamiento): agentes/galeria/
-- El último cerebro de cada perfil y escenario (se guarda solo al entrenar): agentes/<perfil>_<escenario>.npz
+- El último cerebro de cada perfil (se guarda solo al entrenar): agentes/<tipo>/<perfil>.npz
 """
 
+import colorsys
 import os
+import random
 import shutil
 from datetime import datetime
 
 from ai.brain import read_brain, write_brain
-from ai.config import AgentConfig, PROFILES_DIR
+from ai.config import AgentConfig, PROFILES_DIR, KINDS, KIND_LABELS
 
 GALLERY_DIR = os.path.join(PROFILES_DIR, 'galeria')
-KIND_LABELS = {'pista': "Pista", 'laberinto': "Laberinto", 'futbol': "Fútbol"}
 
 
 def save_champion(path, novice_path=None, name=None):
@@ -43,6 +44,13 @@ def _entry(path, gallery):
     novice = path[:-4] + "_gen1.npz"
     try:
         cfg = AgentConfig.from_dict(meta.get('config', {}))
+        cfg.kind = meta['kind']
+        if 'use_role' not in meta.get('config', {}):
+            cfg.use_role = False        # antes no existía esa entrada
+        if 'color' not in meta.get('config', {}):
+            # Cerebros guardados antes de que los agentes tuvieran color: uno fijo según el archivo
+            rng = random.Random(os.path.basename(path))
+            cfg.color = [int(255 * c) for c in colorsys.hsv_to_rgb(rng.random(), 0.7, 0.95)]
     except Exception:
         return None
     if cfg.layer_sizes(meta['kind']) != data['sizes']:
@@ -69,10 +77,13 @@ def list_entries():
                 if e:
                     entries.append(e)
     profile_entries = []
-    if os.path.isdir(PROFILES_DIR):
-        for f in os.listdir(PROFILES_DIR):
+    # agentes/ solo: cerebros de versiones anteriores, cuando los perfiles no estaban separados por tipo
+    for folder in [os.path.join(PROFILES_DIR, kind) for kind in KINDS] + [PROFILES_DIR]:
+        if not os.path.isdir(folder):
+            continue
+        for f in os.listdir(folder):
             if f.endswith('.npz') and not f.endswith('_gen1.npz'):
-                e = _entry(os.path.join(PROFILES_DIR, f), False)
+                e = _entry(os.path.join(folder, f), False)
                 if e:
                     profile_entries.append(e)
     entries.sort(key=lambda e: -e['mtime'])

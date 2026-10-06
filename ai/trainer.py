@@ -18,6 +18,7 @@ import pygame
 from ai import ui
 from ai import hall
 from ai.brain import PopulationBrain
+from ai.sprites import draw_car, variant
 from ai.config import brain_path, PROFILES_DIR
 from ai.world import World, observe
 
@@ -37,9 +38,9 @@ class Trainer:
         self.clock = pygame.time.Clock()
 
         self.kind = scenario.key
-        self.brain = PopulationBrain(config.layer_sizes(self.kind), config.population)
+        self.brain = PopulationBrain(config.layer_sizes(), config.population)
         self.loaded_note = ''
-        path = brain_path(profile, scenario.key)
+        path = brain_path(profile, self.kind)
         if load_brain and os.path.exists(path):
             ok = self.brain.load_into_all(path, mutation_strength=config.mutation_strength)
             self.loaded_note = "Continúa desde el cerebro guardado" if ok else "El cerebro guardado no es compatible: empieza de cero"
@@ -106,6 +107,7 @@ class Trainer:
             self.rec = np.zeros((steps, P, 3), dtype=np.float32)
         self.rec[0] = np.stack([self.world.x, self.world.y, self.world.angle], axis=1)
         self.death_step = np.full(P, self.cfg.max_steps, dtype=np.int32)
+        self.crashed = np.zeros(P, dtype=bool)
         self.step_count = 0
         self.reasons = {'choque': 0, 'llegó': 0, 'sin progreso': 0, 'tiempo': 0}
 
@@ -132,6 +134,7 @@ class Trainer:
             self.death_step[idx[dead]] = self.step_count + 1
             self.reasons['llegó'] += int(done.sum())
             self.reasons['choque'] += int((crashed & ~done).sum())
+            self.crashed[idx[crashed & ~done]] = True
             self.reasons['sin progreso'] += int((stalled & ~crashed & ~done).sum())
         self.step_count += 1
         self.rec[self.step_count] = np.stack([w.x, w.y, w.angle], axis=1)
@@ -139,7 +142,7 @@ class Trainer:
         return True
 
     def end_generation(self):
-        fit = self.scenario.fitness(self.cfg.max_steps)
+        fit = self.scenario.fitness(self.cfg) - self.crashed * self.cfg.p_crash
         best_i = int(np.argmax(fit))
         reached = int((self.scenario.finished_step >= 0).sum())
         self.history.append((float(fit[best_i]), float(fit.mean()), reached))
@@ -168,17 +171,17 @@ class Trainer:
         return info
 
     def save_best(self, i, fitness, suffix=''):
-        os.makedirs(PROFILES_DIR, exist_ok=True)
-        self.brain.save_best(brain_path(self.profile, self.scenario.key, suffix), i, self.meta(fitness))
+        os.makedirs(os.path.join(PROFILES_DIR, self.kind), exist_ok=True)
+        self.brain.save_best(brain_path(self.profile, self.kind, suffix), i, self.meta(fitness))
         if not suffix:
             self.cfg.save(self.profile)
 
     def save_champion(self):
-        path = brain_path(self.profile, self.scenario.key)
+        path = brain_path(self.profile, self.kind)
         if not os.path.exists(path):
             self.flash("Todavía no terminó ninguna generación")
             return
-        name = hall.save_champion(path, brain_path(self.profile, self.scenario.key, '_gen1'))
+        name = hall.save_champion(path, brain_path(self.profile, self.kind, '_gen1'))
         self.flash(f"Guardado en la galería: {name}")
 
     def flash(self, msg):
@@ -206,12 +209,8 @@ class Trainer:
             pygame.draw.lines(self.screen, ui.YELLOW, False, pts, 3)
         x, y, a = path[k]
         cx, cy = self.to_screen((x, y))
-        s = self.scale
-        L, Wd = 20 * s, 10 * s
-        ca, sa = math.cos(float(a)), math.sin(float(a))
-        car = [(cx + ca * dx - sa * dy, cy + sa * dx + ca * dy) for dx, dy in ((L, Wd), (L, -Wd), (-L, -Wd), (-L, Wd))]
-        pygame.draw.polygon(self.screen, ui.YELLOW, car)
-        pygame.draw.circle(self.screen, ui.WHITE, (int(cx), int(cy)), int(max(10, 28 * s)), 2)
+        draw_car(self.screen, (cx, cy), float(a), self.scale, self.cfg.color)
+        pygame.draw.circle(self.screen, ui.WHITE, (int(cx), int(cy)), int(max(12, 30 * self.scale)), 2)
         end = "llegó" if self.replay['finished'] else "no llegó"
         msg = f"REPETICIÓN: el mejor de la generación {self.replay['gen']} ({end})  ·  R o Esc para seguir"
         r = ui.text(self.screen, msg, self.fonts.small, ui.WHITE, midtop=(self.view.centerx, self.view.y + 10))
@@ -297,24 +296,21 @@ class Trainer:
     def draw_cars(self):
         w = self.world
         alive = np.flatnonzero(w.alive)
-        s = self.scale
-        L, Wd = 20 * s, 10 * s
         leader = self.leader()
         for i in alive:
-            cx, cy = self.to_screen((w.x[i], w.y[i]))
-            ca, sa = math.cos(float(w.angle[i])), math.sin(float(w.angle[i]))
-            pts = [(cx + ca * dx - sa * dy, cy + sa * dx + ca * dy)
-                   for dx, dy in ((L, Wd), (L, -Wd), (-L, -Wd), (-L, Wd))]
-            pygame.draw.polygon(self.screen, ui.AGENT_COLORS[i % len(ui.AGENT_COLORS)], pts)
+            if i != leader:
+                draw_car(self.screen, self.to_screen((w.x[i], w.y[i])), float(w.angle[i]), self.scale,
+                         variant(self.cfg.color, i))
         if w.alive[leader]:
             cx, cy = self.to_screen((w.x[leader], w.y[leader]))
-            pygame.draw.circle(self.screen, ui.YELLOW, (int(cx), int(cy)), int(max(10, 28 * s)), 2)
             if self.show_sensors:
                 for ang, dist in zip(w.sensor_angles, w.sensors[leader]):
                     a = w.angle[leader] + ang
                     end = self.to_screen((w.x[leader] + math.cos(a) * dist, w.y[leader] + math.sin(a) * dist))
                     pygame.draw.line(self.screen, (255, 110, 110), (cx, cy), end, 1)
                     pygame.draw.circle(self.screen, (255, 70, 70), (int(end[0]), int(end[1])), 3)
+            draw_car(self.screen, (cx, cy), float(w.angle[leader]), self.scale, self.cfg.color)
+            pygame.draw.circle(self.screen, ui.YELLOW, (int(cx), int(cy)), int(max(12, 30 * self.scale)), 2)
         return leader
 
     def draw_chart(self, rect):
@@ -396,7 +392,7 @@ class Trainer:
         net_h = self.screen.get_height() - 196 - y
         if net_h > 80:
             acts = self.leader_activations(leader)
-            ui.draw_network(self.screen, f, pygame.Rect(x, y, PANEL_W - 30, net_h), self.cfg.layer_sizes(self.kind), acts)
+            ui.draw_network(self.screen, f, pygame.Rect(x, y, PANEL_W - 30, net_h), self.cfg.layer_sizes(), acts)
 
         for kind, k, label, rect in self.panel_buttons():
             active = kind == 'speed' and k == self.speed_idx

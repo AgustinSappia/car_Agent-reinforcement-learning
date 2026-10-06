@@ -173,7 +173,8 @@ class FootballTrainer(Trainer):
         if len(self.bot_cars):
             labels = {c: "bot" for c in range(self.featured * sim.PPM, (self.featured + 1) * sim.PPM)
                       if self.car_brain[c] < 0}
-        draw_match(self.screen, sim, self.featured, self.to_screen, self.scale, labels, highlight=leader)
+        draw_match(self.screen, sim, self.featured, self.to_screen, self.scale, labels, highlight=leader,
+                   stripes=(tuple(self.cfg.color), (40, 40, 40)))
         names = ("IA", "BOT" if len(self.bot_cars) else "IA")
         draw_score(self.screen, self.fonts.big, (self.view.centerx, self.view.y + 26), sim.score[self.featured], names)
         return leader

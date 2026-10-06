@@ -26,7 +26,7 @@ def surface_mask(surface, color=None):
 
 
 class World:
-    def __init__(self, road_mask, config, speed_mask=None, slow_mask=None, kind='pista'):
+    def __init__(self, road_mask, config, speed_mask=None, slow_mask=None, kind=None):
         self.road = road_mask
         self.W, self.H = road_mask.shape
         self.speed_mask = speed_mask

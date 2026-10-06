@@ -3,7 +3,7 @@ Modos para mostrar cerebros ya entrenados (pensados para la Expo):
 
 - ExpoScreen: pantalla dividida. Izquierda, un auto de la generación 1; derecha, el campeón.
   En fútbol juegan un partido entre ellos.
-- RaceScreen: competí contra la IA manejando con las flechas. En fútbol, jugás un partido.
+- RaceScreen: jugá contra la IA manejando con las flechas. En fútbol, jugás un partido.
 """
 
 import copy
@@ -15,10 +15,9 @@ import pygame
 from ai import ui
 from ai.brain import PopulationBrain, single_brain
 from ai.football import FootballSim, draw_match, draw_score, TEAM_COLORS, KICK_COOLDOWN
+from ai.sprites import draw_car, faded
 from ai.world import World, observe
 
-NOVICE_COLOR = (255, 110, 90)
-CHAMP_COLOR = (90, 230, 130)
 PLAYER_COLOR = (80, 170, 255)
 
 
@@ -27,15 +26,6 @@ def novice_brain(entry):
     if entry['novice'] is not None and entry['novice']['sizes'] == entry['sizes']:
         return single_brain(entry['novice']), "Generación 1 (auto típico)"
     return PopulationBrain(entry['sizes'], 1), "Generación 1 (al azar)"
-
-
-def draw_car(surf, pos, angle, scale, color, outline=None):
-    cx, cy = pos
-    L, Wd = 20 * scale, 10 * scale
-    ca, sa = math.cos(angle), math.sin(angle)
-    pts = [(cx + ca * dx - sa * dy, cy + sa * dx + ca * dy) for dx, dy in ((L, Wd), (L, -Wd), (-L, -Wd), (-L, Wd))]
-    pygame.draw.polygon(surf, color, pts)
-    pygame.draw.polygon(surf, outline or (255, 255, 255), pts, 2)
 
 
 def read_keys():
@@ -136,7 +126,7 @@ class SoloRun:
                 end = view.to_screen((self.pos[0] + math.cos(a) * float(dist), self.pos[1] + math.sin(a) * float(dist)))
                 pygame.draw.line(surf, (255, 120, 120), pos, end, 1)
                 pygame.draw.circle(surf, (255, 70, 70), (int(end[0]), int(end[1])), 3)
-        draw_car(surf, pos, self.angle, view.scale, color)
+        draw_car(surf, pos, self.angle, max(view.scale, 0.8), color)
         if self.state == 'crash':
             r = int(16 * max(view.scale, 0.6))
             pygame.draw.line(surf, ui.RED, (pos[0] - r, pos[1] - r), (pos[0] + r, pos[1] + r), 4)
@@ -262,8 +252,9 @@ class ExpoScreen:
 
     def draw_runs(self, W, H):
         f, scr = self.fonts, self.screen
-        sides = [(self.novice, NOVICE_COLOR, self.novice_label.upper()),
-                 (self.champ, CHAMP_COLOR, f"GENERACIÓN {self.gen}")]
+        champ = tuple(self.cfg.color)
+        sides = [(self.novice, faded(champ), self.novice_label.upper()),
+                 (self.champ, champ, f"GENERACIÓN {self.gen}")]
         for k, (run, color, title) in enumerate(sides):
             view = self.views[k]
             scr.blit(view.bg, view.rect)
@@ -289,8 +280,11 @@ class ExpoScreen:
     def draw_football(self, W, H):
         f, scr, sim = self.fonts, self.screen, self.sim
         scr.blit(self.view.bg, self.view.rect)
-        labels = {c: ("Gen 1" if sim.team_of[c] == 0 else f"Gen {self.gen}") for c in range(sim.C)}
-        draw_match(scr, sim, 0, self.view.to_screen, self.view.scale, labels)
+        labels = None
+        if sim.N <= 2:
+            labels = {c: ("Gen 1" if sim.team_of[c] == 0 else f"Gen {self.gen}") for c in range(sim.C)}
+        champ = tuple(self.cfg.color)
+        draw_match(scr, sim, 0, self.view.to_screen, self.view.scale, labels, stripes=(faded(champ), champ))
         draw_score(scr, f.big, (self.view.rect.centerx, self.view.rect.y + 24), sim.score[0],
                    ("GEN 1", f"GEN {self.gen}"))
         sec = sim.steps // 60
@@ -415,7 +409,7 @@ class RaceScreen:
         f, scr = self.fonts, self.screen
         W, H = scr.get_size()
         scr.fill(ui.BG)
-        ui.text(scr, "COMPETÍ CONTRA LA IA", f.big, ui.YELLOW, topleft=(20, 16))
+        ui.text(scr, "JUGÁ CONTRA LA IA", f.big, ui.YELLOW, topleft=(20, 16))
         keys = "Flechas: manejar" + ("  ·  Espacio: patear" if self.football else "")
         ui.text(scr, f"{keys}  ·  R: revancha  ·  Esc: salir", f.small, ui.TEXT_DIM, topleft=(22, 48))
         ui.text(scr, f"Vos {self.wins[0]}  -  {self.wins[1]} IA", f.big, ui.WHITE, topright=(W - 20, 18))
@@ -423,8 +417,11 @@ class RaceScreen:
         scr.blit(v.bg, v.rect)
         if self.football:
             sim = self.sim
-            labels = {c: ("VOS" if c == self.player_car else "IA") for c in range(sim.C)}
-            draw_match(scr, sim, 0, v.to_screen, v.scale, labels, highlight=self.player_car)
+            labels = {c: ("VOS" if c == self.player_car else "IA") for c in range(sim.C) if sim.N <= 2 or c == self.player_car}
+            stripes = [None, None]
+            stripes[int(sim.team_of[self.player_car])] = (255, 255, 255)
+            stripes[1 - int(sim.team_of[self.player_car])] = tuple(self.cfg.color)
+            draw_match(scr, sim, 0, v.to_screen, v.scale, labels, highlight=self.player_car, stripes=stripes)
             draw_score(scr, f.big, (v.rect.centerx, v.rect.y + 24), sim.score[0], ("VOS", "IA"))
             left = max(0, self.match_steps - sim.steps) // 60
             ui.text(scr, f"{left // 60}:{left % 60:02d}", f.normal, ui.WHITE, midtop=(v.rect.centerx, v.rect.y + 48))
@@ -432,7 +429,7 @@ class RaceScreen:
                 ui.text(scr, "Patada lista", f.small, ui.GREEN, bottomleft=(v.rect.x + 10, v.rect.bottom - 8))
         else:
             self.scenario.draw_overlay(scr, v.to_screen, v.scale, f.tiny)
-            self.ai.draw(scr, v, CHAMP_COLOR, sensors=False, label="IA", font=f.small)
+            self.ai.draw(scr, v, tuple(self.cfg.color), sensors=False, label="IA", font=f.small)
             self.player.draw(scr, v, PLAYER_COLOR, label="VOS", font=f.small)
             ui.text(scr, f"Vos: {self.player.progress_text()}   ·   IA: {self.ai.progress_text()}   ·   "
                     f"{self.player.step_n / 60:.1f} s", f.normal, ui.WHITE, midtop=(W // 2, v.rect.bottom + 10))

@@ -80,9 +80,9 @@ class Scenario:
         cy = np.clip((y / CELL).astype(np.int32), 0, field.shape[1] - 1)
         return field[cx, cy]
 
-    def fitness(self, max_steps):
-        """Progreso máximo alcanzado + bonus por terminar rápido"""
-        bonus = np.where(self.finished_step >= 0, (max_steps - self.finished_step) * 2.0, 0)
+    def fitness(self, cfg):
+        """Progreso máximo alcanzado + premio por terminar rápido"""
+        bonus = np.where(self.finished_step >= 0, (cfg.max_steps - self.finished_step) * cfg.r_fast, 0)
         return np.maximum(self.best, 0) + bonus
 
     def map_info(self):
