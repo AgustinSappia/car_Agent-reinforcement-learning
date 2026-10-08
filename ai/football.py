@@ -33,7 +33,7 @@ BALL_FRICTION = 0.985
 WALL_BOUNCE = 0.75
 IDLE_SPEED = 0.3       # más lento que esto cuenta como quieto
 CROWD_DIST = 70        # dos compañeros más cerca que esto están amontonados
-HOLD_SPEED = 0.85      # con la pelota pegada, el auto anda a este porcentaje de su velocidad máxima
+HOLD_SPEED = 0.75      # con la pelota pegada, el auto anda a este porcentaje de su velocidad máxima
 GOOD_KICK_COS = 0.85   # una patada es "útil" si la pelota sale a menos de ~30° del arco rival
 BALL_CONTROLS = [('pegada', "Pegada"), ('libre', "Libre")]
 
